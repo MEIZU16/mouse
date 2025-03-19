@@ -25,6 +25,7 @@ typedef struct {
     bool click_processed;         // 当前点击是否已处理
     bool in_drag_mode;            // 是否处于拖动模式
     NSTimer *long_press_timer;    // 长按检测定时器
+    bool enable_click_detection;  // 启用双击检测
 } AppState;
 
 // 全局状态用于定时器回调
@@ -326,13 +327,31 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                 
                 // 记录按下时间
                 NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+                
+                // 检查是否为双击（间隔小于0.5秒）
+                NSTimeInterval click_interval = current_time - state->last_click_time;
+                if (state->enable_click_detection && 
+                    click_interval < 0.5 && click_interval > 0.01 && 
+                    state->mouseup_sent && 
+                    !state->in_drag_mode) {
+                    
+                    // 这是双击
+                    printf("检测到双击，间隔: %.3f秒\n", click_interval);
+                    state->click_count = 2;
+                } else {
+                    // 普通单击
+                    state->click_count = 1;
+                }
+                
+                // 记录时间戳
                 state->button_down_time = current_time;
+                state->last_click_time = current_time;
+                
                 state->long_press_sent = false;
                 state->mousedown_sent = true;
                 state->mouseup_sent = false;
                 state->click_processed = false;
                 state->in_drag_mode = true; // 立即进入拖动模式
-                state->click_count = 1; // 始终为单击
                 
                 // 创建鼠标按下事件
                 CGEventRef event = CGEventCreateMouseEvent(NULL, 
@@ -343,9 +362,6 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                 
                 CGEventPost(kCGHIDEventTap, event);
                 CFRelease(event);
-                
-                // 记录最后点击时间
-                state->last_click_time = current_time;
             }
             else if ((old_buttons & 0x01) && (mouse_msg->buttons & 0x01) == 0) {
                 // 从按下变为未按下 - 左键释放事件
@@ -390,7 +406,7 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                 // 发送拖动事件
                 CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
                     kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
-                CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
+                CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, state->click_count);
                 CGEventPost(kCGHIDEventTap, drag_event);
                 CFRelease(drag_event);
             }
@@ -424,12 +440,13 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->long_press_sent = false;
     state->last_message_id = 0;
     state->last_click_message_id = 0;
-    state->disable_double_click = true; // 禁用双击功能
+    state->disable_double_click = false; // 启用双击功能
     state->mousedown_sent = false;
     state->mouseup_sent = false;
     state->click_processed = false;
     state->in_drag_mode = false;
     state->long_press_timer = nil;
+    state->enable_click_detection = true; // 启用点击检测
     
     // 获取屏幕尺寸
     NSScreen *mainScreen = [NSScreen mainScreen];
@@ -457,8 +474,8 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->running = true;
     printf("开始监听端口 %d\n", state->port);
     printf("屏幕分辨率: %d x %d\n", state->screen_width, state->screen_height);
-    printf("双击功能已禁用，即时拖动功能已启用\n");
-    printf("已优化为按下即可拖动模式，无需等待长按\n");
+    printf("双击功能已启用，即时拖动功能已启用\n");
+    printf("已优化为按下即可拖动模式，支持双击检测\n");
     
     return true;
 }

@@ -18,6 +18,15 @@ typedef struct {
     int screen_height;             // 屏幕高度
     bool connected;                // 是否已连接
     bool fullscreen;               // 是否全屏
+    uint8_t current_buttons;       // 当前按钮状态
+    
+    // 双击检测相关
+    GTimer *click_timer;           // 计时器
+    gdouble last_click_time;       // 上次点击时间
+    gdouble last_click_x;          // 上次点击X坐标
+    gdouble last_click_y;          // 上次点击Y坐标
+    uint8_t last_click_button;     // 上次点击的按钮
+    bool double_click_sent;        // 是否已发送双击
 } AppState;
 
 // 显示帮助信息
@@ -97,8 +106,11 @@ static gboolean on_motion_notify(GtkWidget *widget G_GNUC_UNUSED, GdkEventMotion
         float rel_x = event->x / state->screen_width;
         float rel_y = event->y / state->screen_height;
         
-        // 发送鼠标移动消息
-        network_send_mouse_move(state->network, rel_x, rel_y, 0);
+        // 发送鼠标移动消息，使用当前保存的按钮状态
+        network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
+        
+        printf("发送移动消息: 按钮状态=%d, 位置=(%.3f, %.3f)\n", 
+               state->current_buttons, rel_x, rel_y);
     }
     
     return TRUE;
@@ -116,8 +128,42 @@ static gboolean on_button_press(GtkWidget *widget G_GNUC_UNUSED, GdkEventButton 
         // 按钮状态（1=左键，2=中键，3=右键）
         uint8_t buttons = 1 << (event->button - 1);
         
+        // 获取当前时间
+        gdouble current_time = g_timer_elapsed(state->click_timer, NULL);
+        
+        // 检查是否是双击（同一个按钮，位置接近，时间间隔小于500ms）
+        if (event->button == state->last_click_button &&
+            fabs(event->x - state->last_click_x) < 5 &&
+            fabs(event->y - state->last_click_y) < 5 &&
+            (current_time - state->last_click_time) < 0.5 &&
+            !state->double_click_sent) {
+            
+            printf("检测到双击: 按钮=%d, 间隔=%.3f秒\n", 
+                   event->button, current_time - state->last_click_time);
+                   
+            // 发送特殊双击标记 (使用相同的按钮状态，后续Mac端处理)
+            // 由于当前协议没有特殊双击字段，我们这里还是发送正常的按下消息
+            // Mac端需要根据时间间隔自己判断是否为双击
+            
+            // 设置已发送双击标记，避免连续多次点击触发多次双击
+            state->double_click_sent = true;
+        } else {
+            // 更新上次点击信息
+            state->last_click_time = current_time;
+            state->last_click_x = event->x;
+            state->last_click_y = event->y;
+            state->last_click_button = event->button;
+            state->double_click_sent = false;
+        }
+        
+        // 更新当前按钮状态
+        state->current_buttons |= buttons;
+        
         // 发送鼠标移动消息
-        network_send_mouse_move(state->network, rel_x, rel_y, buttons);
+        network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
+        
+        printf("发送按下消息: 按钮=%d, 按钮状态=%d, 位置=(%.3f, %.3f)\n", 
+               event->button, state->current_buttons, rel_x, rel_y);
     }
     
     return TRUE;
@@ -132,8 +178,17 @@ static gboolean on_button_release(GtkWidget *widget G_GNUC_UNUSED, GdkEventButto
         float rel_x = event->x / state->screen_width;
         float rel_y = event->y / state->screen_height;
         
-        // 发送鼠标移动消息，按钮参数设为0表示释放
-        network_send_mouse_move(state->network, rel_x, rel_y, 0);
+        // 计算要释放的按钮掩码
+        uint8_t button_mask = 1 << (event->button - 1);
+        
+        // 清除此按钮的状态位
+        state->current_buttons &= ~button_mask;
+        
+        // 发送鼠标移动消息，使用更新后的按钮状态
+        network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
+        
+        printf("发送释放消息: 按钮=%d, 按钮状态=%d, 位置=(%.3f, %.3f)\n", 
+               event->button, state->current_buttons, rel_x, rel_y);
     }
     
     return TRUE;
@@ -170,6 +225,15 @@ static bool init_app(AppState *state, int argc, char **argv) {
     state->network = NULL;
     state->connected = false;
     state->fullscreen = true;  // 默认全屏
+    state->current_buttons = 0; // 初始化按钮状态为0
+    
+    // 初始化双击检测相关参数
+    state->click_timer = g_timer_new();
+    state->last_click_time = 0;
+    state->last_click_x = 0;
+    state->last_click_y = 0;
+    state->last_click_button = 0;
+    state->double_click_sent = false;
     
     // 解析命令行参数
     if (argc < 2 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
@@ -202,6 +266,12 @@ static void cleanup_app(AppState *state) {
     if (state->network) {
         network_cleanup(state->network);
         state->network = NULL;
+    }
+    
+    // 释放计时器
+    if (state->click_timer) {
+        g_timer_destroy(state->click_timer);
+        state->click_timer = NULL;
     }
 }
 
