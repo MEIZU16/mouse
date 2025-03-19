@@ -11,35 +11,26 @@ typedef struct {
     bool running;                 // 运行标志
     uint8_t last_buttons;         // 上次按钮状态
     CGPoint last_position;        // 上次鼠标位置
-    NSTimeInterval last_move_time; // 上次移动时间
+    NSTimeInterval last_move_time;  // 上次移动时间
     NSTimeInterval last_click_time; // 上次点击时间
     bool double_click_pending;    // 双击挂起状态
     int click_count;              // 当前点击次数
     NSTimeInterval button_down_time; // 按钮按下时间
     bool long_press_sent;         // 是否已发送长按事件
+    uint64_t last_message_id;     // 最后处理的消息ID
 } AppState;
 
-// 判断是否为双击
-static bool is_double_click(AppState *state, uint8_t button) {
-    NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
-    NSTimeInterval double_click_time = 0.3; // 双击时间窗口(秒)
-    
-    // 检查是否在双击时间窗口内且有一次点击挂起
-    if (current_time - state->last_click_time < double_click_time && state->double_click_pending) {
-        // 确认为双击
-        return true;
-    }
-    
-    // 不是双击，但记录时间为可能的双击第一次点击
-    state->last_click_time = current_time;
-    state->double_click_pending = true;
-    return false;
-}
-
 // 处理鼠标按钮事件
-static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current_buttons, uint8_t last_buttons) {
+static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current_buttons, 
+                                uint8_t last_buttons, uint64_t message_id) {
     uint8_t changed_buttons = current_buttons ^ last_buttons;
     NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+    
+    // 防止重复处理同一个消息
+    if (message_id == state->last_message_id) {
+        return;
+    }
+    state->last_message_id = message_id;
     
     // 左键处理
     if (changed_buttons & 0x01) {
@@ -49,21 +40,24 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             state->button_down_time = current_time;
             state->long_press_sent = false;
             
-            // 检查是否是双击
-            if (current_time - state->last_click_time < 0.3 && state->double_click_pending) {
+            // 计算与上次点击的时间间隔
+            NSTimeInterval click_interval = current_time - state->last_click_time;
+            
+            // 检查是否是双击 (300ms内的两次点击)
+            if (click_interval < 0.3 && state->double_click_pending) {
                 state->click_count = 2;
                 state->double_click_pending = false;
-                printf("双击检测: 完成双击\n");
+                printf("双击检测: 完成双击 (间隔: %.3f秒)\n", click_interval);
             } else {
                 state->click_count = 1;
                 state->double_click_pending = true;
-                printf("双击检测: 第一次点击\n");
+                printf("单击检测: 第一次点击\n");
             }
             
             // 创建鼠标按下事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
-                
+            
             // 设置点击计数
             CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
             
@@ -77,13 +71,10 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             // 检查是否是长按后释放
             bool was_long_press = state->long_press_sent;
             
-            // 重置长按状态
-            state->long_press_sent = false;
-            
             // 创建鼠标释放事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
-                
+            
             // 设置点击计数
             CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
             
@@ -97,7 +88,8 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
                 printf("长按释放: 重置双击状态\n");
             }
             
-            // 如果是普通点击，保持双击挂起状态不变
+            // 重置长按状态
+            state->long_press_sent = false;
         }
     } else if (current_buttons & 0x01) {
         // 左键保持按下
@@ -116,7 +108,7 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
         // 不管是否长按，只要按钮按下，就发送拖动事件
         CGEventRef event = CGEventCreateMouseEvent(NULL, 
             kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
-            
+        
         // 设置点击计数
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
         
@@ -181,7 +173,7 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
 }
 
 // 处理鼠标移动
-static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_buttons) {
+static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_buttons, uint64_t message_id) {
     // 总是移动鼠标到新位置
     CGWarpMouseCursorPosition(point);
     
@@ -192,7 +184,7 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
         CFRelease(event);
     } else {
         // 如果有按钮按下，处理按钮状态（包括拖动）
-        handle_mouse_buttons(state, point, current_buttons, state->last_buttons);
+        handle_mouse_buttons(state, point, current_buttons, state->last_buttons, message_id);
     }
     
     // 更新最后位置和时间
@@ -214,11 +206,11 @@ void message_callback(const Message* msg, size_t msg_size, void* user_data) {
         CGPoint point = CGPointMake(abs_x, abs_y);
         
         // 处理鼠标移动和按钮
-        handle_mouse_move(state, point, mouse_msg->buttons);
+        handle_mouse_move(state, point, mouse_msg->buttons, mouse_msg->timestamp);
         
         // 如果按钮状态变化了，也处理按钮事件
         if (mouse_msg->buttons != state->last_buttons) {
-            handle_mouse_buttons(state, point, mouse_msg->buttons, state->last_buttons);
+            handle_mouse_buttons(state, point, mouse_msg->buttons, state->last_buttons, mouse_msg->timestamp);
             state->last_buttons = mouse_msg->buttons;
         }
     }
@@ -237,6 +229,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->click_count = 0;
     state->button_down_time = 0;
     state->long_press_sent = false;
+    state->last_message_id = 0;
     
     // 获取屏幕尺寸
     NSScreen *mainScreen = [NSScreen mainScreen];
@@ -264,7 +257,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->running = true;
     printf("开始监听端口 %d\n", state->port);
     printf("屏幕分辨率: %d x %d\n", state->screen_width, state->screen_height);
-    printf("支持双击和长按功能（优化版）\n");
+    printf("支持双击和长按功能（修复版v2）\n");
     
     return true;
 }
@@ -331,4 +324,4 @@ int main(int argc, const char **argv) {
     }
     
     return 0;
-}
+} 
