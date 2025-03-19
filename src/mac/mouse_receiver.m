@@ -29,7 +29,7 @@ typedef struct {
 
 // 长按检测定时器回调
 void long_press_timer_fired(NSTimer *timer) {
-    AppState *state = (AppState *)timer.userInfo;
+    AppState *state = (__bridge AppState *)timer.userInfo;
     if (!state->mousedown_sent || state->mouseup_sent || state->long_press_sent) {
         return; // 不符合长按条件
     }
@@ -132,7 +132,7 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
                                                                            long_press_timer_fired(state->long_press_timer);
                                                                        }]
                                                                      selector:@selector(main)
-                                                                     userInfo:state
+                                                                     userInfo:(__bridge id)state
                                                                       repeats:NO];
             
             // 确保定时器在当前运行循环的所有模式下都能运行
@@ -335,7 +335,7 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
 }
 
 // 处理消息回调
-void message_callback(const Message* msg, size_t msg_size, void* user_data) {
+void message_callback(const Message* msg, size_t __unused msg_size, void* user_data) {
     AppState *state = (AppState *)user_data;
     
     // 只处理鼠标移动消息
@@ -437,7 +437,7 @@ void run_app(AppState *state) {
     // 创建一个计时器，定期检查接收消息
     NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.01 // 10毫秒
                                                      repeats:YES
-                                                       block:^(NSTimer *_Nonnull timer) {
+                                                       block:^(NSTimer * __unused timer) {
         Message msg;
         size_t msg_size;
         
