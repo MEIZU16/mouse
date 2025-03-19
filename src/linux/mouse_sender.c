@@ -7,6 +7,7 @@
 #include <gdk/gdkwayland.h>
 #include <wayland-client.h>
 #include "../common/network.h"
+#include <time.h>  // 添加对time.h的包含，以支持clock_gettime函数
 
 // 程序状态
 typedef struct {
@@ -256,26 +257,42 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
         float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
         
+        // 静态变量存储上次滚动时间
+        static uint64_t last_scroll_time = 0;
+        uint64_t current_time;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        current_time = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+        
+        // 限制发送频率，避免发送过于频繁的滚轮事件 (至少间隔50毫秒)
+        if (current_time - last_scroll_time < 50) {
+            printf("[DEBUG] 忽略快速滚轮事件 (间隔=%llu ms)\n", current_time - last_scroll_time);
+            return TRUE;
+        }
+        
+        // 更新上次滚动时间
+        last_scroll_time = current_time;
+        
         // 初始化滚动量
         float delta_x = 0.0;
         float delta_y = 0.0;
         
-        // 根据滚动方向设置滚动量 - 使用合理的值
+        // 根据滚动方向设置滚动量 - 使用非常小的值
         switch (event->direction) {
             case GDK_SCROLL_UP:
-                delta_y = -1.0; // 向上滚动
+                delta_y = -0.5; // 向上滚动
                 printf("[DEBUG] 检测到向上滚动\n");
                 break;
             case GDK_SCROLL_DOWN:
-                delta_y = 1.0;  // 向下滚动
+                delta_y = 0.5;  // 向下滚动
                 printf("[DEBUG] 检测到向下滚动\n");
                 break;
             case GDK_SCROLL_LEFT:
-                delta_x = -1.0; // 向左滚动
+                delta_x = -0.5; // 向左滚动
                 printf("[DEBUG] 检测到向左滚动\n");
                 break;
             case GDK_SCROLL_RIGHT:
-                delta_x = 1.0;  // 向右滚动
+                delta_x = 0.5;  // 向右滚动
                 printf("[DEBUG] 检测到向右滚动\n");
                 break;
             case GDK_SCROLL_SMOOTH:
@@ -283,18 +300,19 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
                 gdouble dx = 0.0, dy = 0.0;
                 gdk_event_get_scroll_deltas((GdkEvent*)event, &dx, &dy);
                 
-                // 缩放到合理范围，避免太大或太小的值
-                delta_x = dx;
-                delta_y = dy;
+                // 大幅减小滚动量，确保平滑
+                delta_x = dx * 0.2;
+                delta_y = dy * 0.2;
                 
-                // 限制最大滚动量，避免系统过度反应
-                if (delta_x > 1.0) delta_x = 1.0;
-                else if (delta_x < -1.0) delta_x = -1.0;
+                // 限制最大值
+                if (delta_x > 0.5) delta_x = 0.5;
+                else if (delta_x < -0.5) delta_x = -0.5;
                 
-                if (delta_y > 1.0) delta_y = 1.0;
-                else if (delta_y < -1.0) delta_y = -1.0;
+                if (delta_y > 0.5) delta_y = 0.5;
+                else if (delta_y < -0.5) delta_y = -0.5;
                 
-                printf("[DEBUG] 检测到平滑滚动: (%.2f, %.2f)\n", delta_x, delta_y);
+                printf("[DEBUG] 检测到平滑滚动: 原始=(%.2f, %.2f), 缩放后=(%.2f, %.2f)\n", 
+                       dx, dy, delta_x, delta_y);
                 break;
             default:
                 break;
@@ -310,6 +328,9 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
             if (!network_send_scroll(state->network, rel_x, rel_y, delta_x, delta_y)) {
                 printf("[ERROR] 发送滚轮事件失败\n");
             }
+            
+            // 发送后等待一小段时间，避免频繁发送
+            usleep(20000); // 20毫秒
         }
     }
     

@@ -303,43 +303,46 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
 }
 
-// 处理滚轮事件 - 不再使用键盘模拟
+// 处理滚轮事件 - 完全简化版本，避免复杂处理
 static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
-    // 记录原始滚轮值
+    // 记录原始滚轮值，但不执行过多处理
     printf("[DEBUG] 处理滚轮: 原始值=(%.2f, %.2f)\n", delta_x, delta_y);
     
-    // 先移动鼠标到正确位置
-    CGWarpMouseCursorPosition(point);
+    // 转换滚轮数值，反转方向，确保值很小，避免过大
+    double scroll_y = -delta_y * 0.1; // 缩小数值到十分之一
+    double scroll_x = -delta_x * 0.1; // 缩小数值到十分之一
     
-    // 转换滚轮数值，反转方向，macOS约定为负值向上滚动
-    // 使用小数值，不要过大，过大的值可能导致控制问题
-    double scroll_y = -delta_y * 0.5;
-    double scroll_x = -delta_x * 0.5;
+    // 极小值处理为0，避免过于敏感
+    if (fabs(scroll_y) < 0.01) scroll_y = 0.0;
+    if (fabs(scroll_x) < 0.01) scroll_x = 0.0;
     
-    // 如果数值太小，设为0
-    if (fabs(scroll_y) < 0.1) scroll_y = 0.0;
-    if (fabs(scroll_x) < 0.1) scroll_x = 0.0;
+    // 限制最大值
+    if (scroll_y > 0.3) scroll_y = 0.3;
+    else if (scroll_y < -0.3) scroll_y = -0.3;
     
-    // 不使用像素单位，而是使用显示单位
+    if (scroll_x > 0.3) scroll_x = 0.3;
+    else if (scroll_x < -0.3) scroll_x = -0.3;
+    
+    // 使用线单位 (line)，而不是像素单位，线单位更加平滑
     CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
-        NULL,                      // 默认源
-        kCGScrollEventUnitPixel,   // 像素单位
-        2,                         // 2轴滚动
-        scroll_y,                  // 垂直滚动
-        scroll_x                   // 水平滚动
+        NULL,                    // 默认源
+        kCGScrollEventUnitLine,  // 使用线单位
+        2,                       // 2轴滚动
+        (int32_t)round(scroll_y), // 向下取整
+        (int32_t)round(scroll_x)  // 向下取整
     );
     
     if (scrollEvent) {
-        // 确保一次性发送，释放前不再拖延
+        // 发送滚轮事件，然后立即释放
         CGEventPost(kCGHIDEventTap, scrollEvent);
         CFRelease(scrollEvent);
-        printf("[DEBUG] 发送滚轮事件: (%.2f, %.2f)\n", scroll_y, scroll_x);
+        printf("[DEBUG] 发送滚轮事件: (%.2f, %.2f) -> (%d, %d)\n", 
+               scroll_y, scroll_x, (int32_t)round(scroll_y), (int32_t)round(scroll_x));
     } else {
         printf("[ERROR] 无法创建滚轮事件\n");
     }
     
-    // 更新鼠标位置
-    state->last_position = point;
+    // 不需要更新鼠标位置，避免竞争条件
 }
 
 // 处理消息回调
@@ -505,43 +508,42 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             // 滚轮事件消息处理
             const ScrollMessage *scroll_msg = (const ScrollMessage *)msg;
             
-            // 1. 计算绝对坐标
-            CGFloat abs_x = scroll_msg->rel_x * state->screen_width;
-            CGFloat abs_y = scroll_msg->rel_y * state->screen_height;
-            
-            // 确保坐标在屏幕范围内
-            abs_x = fmax(0, fmin(abs_x, state->screen_width - 1));
-            abs_y = fmax(0, fmin(abs_y, state->screen_height - 1));
-            
-            CGPoint point = CGPointMake(abs_x, abs_y);
-            
-            // 2. 防止重复处理
+            // 1. 防止重复处理
             if (scroll_msg->timestamp == state->last_message_id) {
                 printf("[DEBUG] 忽略重复的滚轮消息 ID: %llu\n", scroll_msg->timestamp);
                 return;
             }
             
-            // 3. 记录消息ID
+            // 2. 记录消息ID
             state->last_message_id = scroll_msg->timestamp;
             
-            // 4. 检查滚动值
-            if (scroll_msg->delta_x == 0.0 && scroll_msg->delta_y == 0.0) {
-                printf("[DEBUG] 忽略无效的滚轮消息: 滚动量为零\n");
+            // 3. 验证数据有效性
+            if (isnan(scroll_msg->delta_x) || isnan(scroll_msg->delta_y) ||
+                isinf(scroll_msg->delta_x) || isinf(scroll_msg->delta_y)) {
+                printf("[ERROR] 收到无效的滚轮消息: 无效数值\n");
                 return;
             }
             
-            // 5. 输出调试信息
+            // 4. 检查滚动值，如果太小则忽略
+            if (fabs(scroll_msg->delta_x) < 0.001 && fabs(scroll_msg->delta_y) < 0.001) {
+                printf("[DEBUG] 忽略无效的滚轮消息: 滚动量太小\n");
+                return;
+            }
+            
+            // 5. 计算绝对坐标仅用于调试输出，不进行坐标转换
+            float abs_x = fmax(0, fmin(scroll_msg->rel_x * state->screen_width, state->screen_width - 1));
+            float abs_y = fmax(0, fmin(scroll_msg->rel_y * state->screen_height, state->screen_height - 1));
+            
+            // 6. 直接发送浮点值，不转换为坐标
             printf("[DEBUG] 收到滚轮消息: 位置=(%.1f, %.1f), 滚动量=(%.2f, %.2f)\n", 
                    abs_x, abs_y, scroll_msg->delta_x, scroll_msg->delta_y);
             
-            // 6. 处理滚轮事件 - 异常处理支持
+            // 7. 添加异常保护
             @try {
-                handle_scroll(state, point, scroll_msg->delta_x, scroll_msg->delta_y);
+                // 直接处理滚轮事件，使用浮点值，简化处理
+                handle_scroll(state, state->last_position, scroll_msg->delta_x, scroll_msg->delta_y);
             } @catch (NSException *exception) {
                 printf("[ERROR] 滚轮处理异常: %s\n", [exception.reason UTF8String]);
-            } @finally {
-                // 确保即使出现异常，鼠标控制也不会丢失
-                CGWarpMouseCursorPosition(point);
             }
             
             break;
