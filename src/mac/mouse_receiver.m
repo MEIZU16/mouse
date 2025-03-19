@@ -226,6 +226,36 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     // 总是移动鼠标到新位置
     CGWarpMouseCursorPosition(point);
     
+    // 如果按钮已按下，检查是否为长按
+    if (current_buttons & 0x01 && state->mousedown_sent && !state->mouseup_sent) {
+        NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+        NSTimeInterval press_duration = current_time - state->button_down_time;
+        
+        // 如果按下时间超过500毫秒且未触发长按，则触发长按
+        if (press_duration > 0.5 && !state->long_press_sent) {
+            state->long_press_sent = true;
+            state->in_drag_mode = true;
+            printf("鼠标移动时检测到长按: %.2f秒，启用拖动模式\n", press_duration);
+            
+            // 发送拖动事件
+            CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
+                kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+            CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
+            CGEventPost(kCGHIDEventTap, drag_event);
+            CFRelease(drag_event);
+        }
+        
+        // 如果已处于拖动模式，则继续发送拖动事件
+        if (state->in_drag_mode) {
+            CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
+                kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+            CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
+            CGEventPost(kCGHIDEventTap, drag_event);
+            CFRelease(drag_event);
+            printf("持续拖动中...\n");
+        }
+    }
+    
     // 如果没有按钮按下，发送移动事件
     if (current_buttons == 0) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
@@ -261,6 +291,19 @@ void message_callback(const Message* msg, size_t msg_size, void* user_data) {
         
         // 检查按钮状态变化
         bool button_changed = mouse_msg->buttons != state->last_buttons;
+        
+        // 长按检测（即使按钮没有变化也要检查）
+        if ((mouse_msg->buttons & 0x01) && state->mousedown_sent && !state->mouseup_sent) {
+            NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+            NSTimeInterval press_duration = current_time - state->button_down_time;
+            
+            // 每次消息来时都检查一下长按状态
+            if (press_duration > 0.5 && !state->long_press_sent) {
+                state->long_press_sent = true;
+                state->in_drag_mode = true;
+                printf("消息处理时检测到长按: %.2f秒，启用拖动模式\n", press_duration);
+            }
+        }
         
         // 处理鼠标移动
         if (!button_changed) {
