@@ -302,6 +302,11 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
         CGEventPost(kCGHIDEventTap, drag_event);
         CFRelease(drag_event);
         printf("持续拖动中...\n");
+        
+        // 更新位置，但不要调用handle_mouse_buttons
+        state->last_position = point;
+        state->last_move_time = [[NSDate date] timeIntervalSince1970];
+        return; // 直接返回，避免触发其他处理
     } else if ((current_buttons & 0x01) && state->mousedown_sent && !state->mouseup_sent && !state->long_press_sent) {
         // 如果按钮已按下但尚未触发长按，检查是否现在应该触发
         NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
@@ -322,6 +327,11 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
             CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
             CGEventPost(kCGHIDEventTap, drag_event);
             CFRelease(drag_event);
+            
+            // 更新位置
+            state->last_position = point;
+            state->last_move_time = current_time;
+            return; // 直接返回，避免触发其他处理
         }
     }
     
@@ -330,8 +340,8 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
-    } else {
-        // 如果有按钮按下，处理按钮状态
+    } else if (!(current_buttons & 0x01 && state->in_drag_mode)) {
+        // 只有当不处于拖动模式时，才调用handle_mouse_buttons
         handle_mouse_buttons(state, point, current_buttons, state->last_buttons, message_id);
     }
     
@@ -365,9 +375,32 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
         if (!button_changed) {
             handle_mouse_move(state, point, mouse_msg->buttons, mouse_msg->timestamp);
         } else {
-            // 如果按钮状态变化了，单独处理按钮事件
-            handle_mouse_buttons(state, point, mouse_msg->buttons, state->last_buttons, mouse_msg->timestamp);
-            state->last_buttons = mouse_msg->buttons;
+            // 如果是从按下状态变为未按下状态（释放），处理释放事件
+            // 否则，如果是按下事件，处理按下事件
+            if ((state->last_buttons & 0x01) && !(mouse_msg->buttons & 0x01)) {
+                // 左键释放事件
+                // 更新按钮状态
+                uint8_t old_buttons = state->last_buttons;
+                state->last_buttons = mouse_msg->buttons;
+                
+                // 处理释放
+                handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
+            } else if (!(state->last_buttons & 0x01) && (mouse_msg->buttons & 0x01)) {
+                // 左键按下事件
+                // 更新按钮状态
+                uint8_t old_buttons = state->last_buttons;
+                state->last_buttons = mouse_msg->buttons;
+                
+                // 处理按下
+                handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
+            } else {
+                // 其他按钮变化
+                uint8_t old_buttons = state->last_buttons;
+                state->last_buttons = mouse_msg->buttons;
+                
+                // 处理按钮事件
+                handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
+            }
         }
     }
 }
