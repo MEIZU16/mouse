@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <unistd.h>  // 添加对unistd.h的包含，以支持usleep函数
 #include <gtk/gtk.h>
 #include <gdk/gdkwayland.h>
 #include <wayland-client.h>
@@ -255,47 +256,49 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
         float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
         
-        // 初始化滚动量 - 保持简单的方向值
+        // 初始化滚动量
         gdouble delta_x = 0.0;
         gdouble delta_y = 0.0;
         
-        // 根据滚动方向设置滚动量 - 使用简单的-1/1值
+        // 根据滚动方向设置滚动量 - 使用更大的值来提高明显度
         switch (event->direction) {
             case GDK_SCROLL_UP:
-                delta_y = -1.0; // 向上滚动
+                delta_y = -5.0; // 向上滚动 - 大值
                 break;
             case GDK_SCROLL_DOWN:
-                delta_y = 1.0;  // 向下滚动
+                delta_y = 5.0;  // 向下滚动 - 大值
                 break;
             case GDK_SCROLL_LEFT:
-                delta_x = -1.0; // 向左滚动
+                delta_x = -5.0; // 向左滚动 - 大值
                 break;
             case GDK_SCROLL_RIGHT:
-                delta_x = 1.0;  // 向右滚动
+                delta_x = 5.0;  // 向右滚动 - 大值
                 break;
             case GDK_SCROLL_SMOOTH:
-                // 使用精确的滚动量，但简化处理
+                // 对于平滑滚动，获取原始滚动量
                 gdk_event_get_scroll_deltas((GdkEvent*)event, &delta_x, &delta_y);
                 
-                // 只保留方向信息，忽略大小
-                if (fabs(delta_x) < 0.1) delta_x = 0;
-                else delta_x = (delta_x > 0) ? 1 : -1;
+                // 放大滚动量，使其更明显
+                delta_x *= 5.0;
+                delta_y *= 5.0;
                 
-                if (fabs(delta_y) < 0.1) delta_y = 0;
-                else delta_y = (delta_y > 0) ? 1 : -1;
+                // 如果滚动量太小，忽略
+                if (fabs(delta_x) < 0.1) delta_x = 0.0;
+                if (fabs(delta_y) < 0.1) delta_y = 0.0;
                 break;
             default:
                 break;
         }
         
         // 只有在有实际滚动时才发送事件
-        if (delta_x != 0 || delta_y != 0) {
+        if (delta_x != 0.0 || delta_y != 0.0) {
             // 发送滚轮事件
             if (network_send_scroll(state->network, rel_x, rel_y, (float)delta_x, (float)delta_y)) {
-                printf("发送滚轮事件: 位置=(%.3f, %.3f), 滚动量=(%.0f, %.0f)\n", 
+                printf("发送滚轮事件: 位置=(%.3f, %.3f), 滚动量=(%.1f, %.1f)\n", 
                        rel_x, rel_y, delta_x, delta_y);
                 
-                // 发送一个普通鼠标移动消息来确保控制不会丢失
+                // 确保控制不会丢失 - 延迟发送一个鼠标移动事件
+                usleep(10000); // 等待10毫秒
                 network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
             } else {
                 printf("发送滚轮事件失败\n");
