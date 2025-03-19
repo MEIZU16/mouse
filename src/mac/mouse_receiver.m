@@ -24,34 +24,7 @@ typedef struct {
     bool mouseup_sent;            // 是否已发送释放事件
     bool click_processed;         // 当前点击是否已处理
     bool in_drag_mode;            // 是否处于拖动模式
-    NSTimer *long_press_timer;    // 长按检测定时器
 } AppState;
-
-// 长按检测回调函数
-static void check_long_press(AppState *state) {
-    if (!state->mousedown_sent || state->mouseup_sent || state->long_press_sent) {
-        return; // 不符合长按条件
-    }
-    
-    NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
-    NSTimeInterval press_duration = current_time - state->button_down_time;
-    
-    if (press_duration > 0.5) {
-        // 超过500毫秒视为长按
-        state->long_press_sent = true;
-        state->in_drag_mode = true;
-        state->double_click_pending = false; // 长按取消双击挂起状态
-        
-        printf("检测到长按: %.2f秒，启用拖动模式\n", press_duration);
-        
-        // 发送拖动事件
-        CGEventRef event = CGEventCreateMouseEvent(NULL, 
-            kCGEventLeftMouseDragged, state->last_position, kCGMouseButtonLeft);
-        CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
-    }
-}
 
 // 处理鼠标按钮事件
 static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current_buttons, 
@@ -119,14 +92,6 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             
             // 记录最后点击时间
             state->last_click_time = current_time;
-            
-            // 启动长按检测定时器
-            [state->long_press_timer invalidate];
-            state->long_press_timer = [NSTimer scheduledTimerWithTimeInterval:0.02
-                                                                      repeats:YES
-                                                                        block:^(NSTimer *timer) {
-                check_long_press(state);
-            }];
         } else {
             // 左键释放
             // 如果没有对应的按下事件，忽略此释放事件
@@ -134,10 +99,6 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
                 printf("忽略孤立的mouseup事件\n");
                 return;
             }
-            
-            // 停止长按检测定时器
-            [state->long_press_timer invalidate];
-            state->long_press_timer = nil;
             
             state->mousedown_sent = false;
             state->mouseup_sent = true;
@@ -175,7 +136,19 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
         }
     } else if (current_buttons & 0x01) {
         // 左键保持按下
-        // 如果已经处于拖动模式或长按状态，继续发送拖动事件
+        // 检查是否应该触发长按事件
+        NSTimeInterval press_duration = current_time - state->button_down_time;
+        
+        if (press_duration > 0.5 && !state->long_press_sent && state->mousedown_sent && !state->mouseup_sent) {
+            // 超过500毫秒视为长按
+            state->long_press_sent = true;
+            state->in_drag_mode = true;
+            state->double_click_pending = false; // 长按取消双击挂起状态
+            
+            printf("检测到长按: %.2f秒，启用拖动模式\n", press_duration);
+        }
+        
+        // 如果处于拖动模式或长按状态，发送拖动事件
         if (state->long_press_sent || state->in_drag_mode) {
             // 发送拖动事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
@@ -186,6 +159,8 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             
             CGEventPost(kCGHIDEventTap, event);
             CFRelease(event);
+            
+            printf("发送拖动事件\n");
         }
     }
     
@@ -318,7 +293,6 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->mouseup_sent = false;
     state->click_processed = false;
     state->in_drag_mode = false;
-    state->long_press_timer = nil;
     
     // 获取屏幕尺寸
     NSScreen *mainScreen = [NSScreen mainScreen];
@@ -346,7 +320,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->running = true;
     printf("开始监听端口 %d\n", state->port);
     printf("屏幕分辨率: %d x %d\n", state->screen_width, state->screen_height);
-    printf("双击功能和长按功能已启用\n");
+    printf("双击功能和长按功能已启用（直接检测版）\n");
     
     return true;
 }
@@ -357,9 +331,6 @@ void cleanup_app(AppState *state) {
         network_cleanup(state->network);
         state->network = NULL;
     }
-    
-    [state->long_press_timer invalidate];
-    state->long_press_timer = nil;
     
     state->running = false;
 }
@@ -378,6 +349,9 @@ void run_app(AppState *state) {
             // 消息已在回调函数中处理
         }
     }];
+    
+    // 将计时器添加到当前运行循环的通用模式
+    [[NSRunLoop currentRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     
     // 启动NSRunLoop
     [[NSRunLoop currentRunLoop] run];
