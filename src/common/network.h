@@ -30,6 +30,9 @@ bool network_send_message(NetworkContext* ctx, const Message* msg, size_t msg_si
 // 快捷方法：发送鼠标移动消息
 bool network_send_mouse_move(NetworkContext* ctx, float rel_x, float rel_y, uint8_t buttons);
 
+// 快捷方法：发送滚轮事件消息
+bool network_send_scroll(NetworkContext* ctx, float rel_x, float rel_y, float delta_x, float delta_y);
+
 // 接收消息，非阻塞，如果没有消息则返回false
 bool network_receive_message(NetworkContext* ctx, Message* msg, size_t* msg_size);
 

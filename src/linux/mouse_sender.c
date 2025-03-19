@@ -29,39 +29,50 @@ typedef struct {
     bool double_click_sent;        // 是否已发送双击
 } AppState;
 
+// 函数原型声明
+static gboolean on_motion_notify(GtkWidget *widget, GdkEventMotion *event, gpointer data);
+static gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer data);
+static gboolean on_button_release(GtkWidget *widget, GdkEventButton *event, gpointer data);
+static gboolean on_scroll_event(GtkWidget *widget, GdkEventScroll *event, gpointer data);
+GtkWidget *create_window(AppState *state);
+
 // 显示帮助信息
 static void show_usage(const char *program_name) {
-    printf("用法: %s <服务器IP> [端口]\n\n", program_name);
+    printf("用法: %s <服务器IP> [端口] [宽度x高度]\n\n", program_name);
     printf("选项:\n");
     printf("  <服务器IP>           Mac接收端的IP地址\n");
     printf("  [端口]               Mac接收端的端口号（默认：%d）\n", DEFAULT_PORT);
+    printf("  [宽度x高度]          指定屏幕分辨率，例如：1920x1080\n");
     printf("\n");
     printf("示例:\n");
-    printf("  %s 192.168.1.100     连接到IP为192.168.1.100的Mac，使用默认端口\n", program_name);
-    printf("  %s 10.0.0.5 8888     连接到IP为10.0.0.5的Mac，使用端口8888\n", program_name);
+    printf("  %s 192.168.1.100                连接到IP为192.168.1.100的Mac，使用默认端口\n", program_name);
+    printf("  %s 10.0.0.5 8888                连接到IP为10.0.0.5的Mac，使用端口8888\n", program_name);
+    printf("  %s 192.168.1.100 8765 1920x1080 连接到IP为192.168.1.100的Mac，使用分辨率1920x1080\n", program_name);
     printf("\n");
     printf("其他命令:\n");
     printf("  -h, --help           显示此帮助信息\n");
 }
 
 // 创建主窗口
-static void create_window(AppState *state) {
+GtkWidget *create_window(AppState *state) {
     // 创建窗口
     state->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(state->window), "鼠标移动捕获器");
-    
-    // 设置窗口大小
-    gtk_window_set_default_size(GTK_WINDOW(state->window), 800, 600);
     
     // 创建绘图区域
     state->drawing_area = gtk_drawing_area_new();
     gtk_container_add(GTK_CONTAINER(state->window), state->drawing_area);
     
-    // 设置事件掩码
+    gtk_widget_set_size_request(state->drawing_area, 800, 600);
+    
+    // 事件掩码 - 包括鼠标按钮和移动事件
+    // 添加滚轮事件掩码
     gtk_widget_add_events(state->drawing_area, 
-                          GDK_POINTER_MOTION_MASK | 
-                          GDK_BUTTON_PRESS_MASK | 
-                          GDK_BUTTON_RELEASE_MASK);
+                         GDK_BUTTON_PRESS_MASK | 
+                         GDK_BUTTON_RELEASE_MASK | 
+                         GDK_POINTER_MOTION_MASK | 
+                         GDK_SCROLL_MASK |         // 普通滚轮事件
+                         GDK_SMOOTH_SCROLL_MASK);  // 平滑滚动支持
     
     // 退出时关闭程序
     g_signal_connect(state->window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
@@ -74,27 +85,49 @@ static void create_window(AppState *state) {
         gtk_window_fullscreen(GTK_WINDOW(state->window));
     }
     
-    // 获取屏幕尺寸
-    GdkDisplay *display = gtk_widget_get_display(state->window);
-    if (display) {
-        GdkMonitor *monitor = gdk_display_get_primary_monitor(display);
-        if (monitor) {
-            GdkRectangle workarea;
-            gdk_monitor_get_workarea(monitor, &workarea);
-            state->screen_width = workarea.width;
-            state->screen_height = workarea.height;
+    // 获取屏幕尺寸（只有在没有通过命令行参数指定时才获取）
+    // 注意：这里我们假设如果state->screen_width和state->screen_height已经被设置为
+    // 非默认值，则说明用户通过命令行指定了分辨率
+    bool use_system_resolution = state->screen_width == 1920 && state->screen_height == 1080;
+    
+    if (use_system_resolution) {
+        GdkDisplay *display = gtk_widget_get_display(state->window);
+        if (display) {
+            GdkMonitor *monitor = gdk_display_get_primary_monitor(display);
+            if (monitor) {
+                GdkRectangle workarea;
+                gdk_monitor_get_workarea(monitor, &workarea);
+                
+                // 只有在成功获取到有效值时才更新
+                if (workarea.width > 0 && workarea.height > 0) {
+                    state->screen_width = workarea.width;
+                    state->screen_height = workarea.height;
+                    printf("成功获取系统屏幕分辨率: %dx%d\n", state->screen_width, state->screen_height);
+                } else {
+                    printf("无法获取有效的系统屏幕分辨率，使用默认值: %dx%d\n", 
+                           state->screen_width, state->screen_height);
+                }
+            } else {
+                printf("无法获取主监视器，使用默认或指定的分辨率: %dx%d\n", 
+                       state->screen_width, state->screen_height);
+            }
         } else {
-            // 如果无法获取主监视器，使用默认值
-            state->screen_width = 1920;
-            state->screen_height = 1080;
-            fprintf(stderr, "警告：无法获取主监视器，使用默认分辨率 1920x1080\n");
+            printf("无法获取显示，使用默认或指定的分辨率: %dx%d\n", 
+                   state->screen_width, state->screen_height);
         }
     } else {
-        // 如果无法获取显示，使用默认值
-        state->screen_width = 1920;
-        state->screen_height = 1080;
-        fprintf(stderr, "警告：无法获取显示，使用默认分辨率 1920x1080\n");
+        printf("使用指定的屏幕分辨率: %dx%d\n", state->screen_width, state->screen_height);
     }
+    
+    // 连接鼠标事件处理函数
+    g_signal_connect(G_OBJECT(state->drawing_area), "button-press-event", G_CALLBACK(on_button_press), state);
+    g_signal_connect(G_OBJECT(state->drawing_area), "button-release-event", G_CALLBACK(on_button_release), state);
+    g_signal_connect(G_OBJECT(state->drawing_area), "motion-notify-event", G_CALLBACK(on_motion_notify), state);
+
+    // 连接滚轮事件处理函数
+    g_signal_connect(G_OBJECT(state->drawing_area), "scroll-event", G_CALLBACK(on_scroll_event), state);
+    
+    return state->window;
 }
 
 // 鼠标移动回调函数
@@ -213,6 +246,54 @@ static gboolean on_button_release(GtkWidget *widget G_GNUC_UNUSED, GdkEventButto
     return TRUE;
 }
 
+// 鼠标滚轮事件回调函数
+static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll *event, gpointer data) {
+    AppState *state = (AppState *)data;
+    
+    if (state->connected) {
+        // 计算鼠标相对位置（0.0-1.0）
+        float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
+        float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
+        
+        // 初始化滚动量
+        gdouble delta_x = 0.0;
+        gdouble delta_y = 0.0;
+        
+        // 根据滚动方向设置滚动量
+        switch (event->direction) {
+            case GDK_SCROLL_UP:
+                delta_y = -1.0; // 向上滚动
+                break;
+            case GDK_SCROLL_DOWN:
+                delta_y = 1.0;  // 向下滚动
+                break;
+            case GDK_SCROLL_LEFT:
+                delta_x = -1.0; // 向左滚动
+                break;
+            case GDK_SCROLL_RIGHT:
+                delta_x = 1.0;  // 向右滚动
+                break;
+            case GDK_SCROLL_SMOOTH:
+                // 使用精确的滚动量
+                gdk_event_get_scroll_deltas((GdkEvent*)event, &delta_x, &delta_y);
+                // 放大滚动量使其更明显
+                delta_x *= 10.0;
+                delta_y *= 10.0;
+                break;
+            default:
+                break;
+        }
+        
+        // 发送滚轮事件消息
+        network_send_scroll(state->network, rel_x, rel_y, (float)delta_x, (float)delta_y);
+        
+        printf("发送滚轮事件: 位置=(%.3f, %.3f), 滚动量=(%.1f, %.1f)\n", 
+               rel_x, rel_y, (float)delta_x, (float)delta_y);
+    }
+    
+    return TRUE;
+}
+
 // 连接到服务器
 static bool connect_to_server(AppState *state) {
     if (!state->network) {
@@ -245,6 +326,8 @@ static bool init_app(AppState *state, int argc, char **argv) {
     state->connected = false;
     state->fullscreen = true;  // 默认全屏
     state->current_buttons = 0; // 初始化按钮状态为0
+    state->screen_width = 1920;  // 默认分辨率
+    state->screen_height = 1080; // 默认分辨率
     
     // 初始化双击检测相关参数
     state->click_timer = g_timer_new();
@@ -263,13 +346,32 @@ static bool init_app(AppState *state, int argc, char **argv) {
     state->server_ip = argv[1];
     state->port = (argc > 2) ? atoi(argv[2]) : DEFAULT_PORT;
     
+    // 解析屏幕分辨率参数（如果提供）
+    if (argc > 3) {
+        int width, height;
+        if (sscanf(argv[3], "%dx%d", &width, &height) == 2) {
+            if (width > 0 && height > 0) {
+                state->screen_width = width;
+                state->screen_height = height;
+                printf("使用命令行指定的屏幕分辨率: %dx%d\n", width, height);
+            } else {
+                fprintf(stderr, "警告: 无效的分辨率格式 '%s'，使用默认分辨率 %dx%d\n", 
+                        argv[3], state->screen_width, state->screen_height);
+            }
+        } else {
+            fprintf(stderr, "警告: 无效的分辨率格式 '%s'，使用默认分辨率 %dx%d\n", 
+                    argv[3], state->screen_width, state->screen_height);
+        }
+    }
+    
     // 创建主窗口
     create_window(state);
     
-    // 连接信号
-    g_signal_connect(state->drawing_area, "motion-notify-event", G_CALLBACK(on_motion_notify), state);
-    g_signal_connect(state->drawing_area, "button-press-event", G_CALLBACK(on_button_press), state);
-    g_signal_connect(state->drawing_area, "button-release-event", G_CALLBACK(on_button_release), state);
+    // 如果窗口创建后，系统检测分辨率失败，则使用命令行指定的分辨率
+    if (state->screen_width <= 0 || state->screen_height <= 0) {
+        fprintf(stderr, "警告: 无法获取屏幕分辨率，使用指定或默认值: %dx%d\n", 
+                state->screen_width, state->screen_height);
+    }
     
     // 连接到服务器
     if (!connect_to_server(state)) {

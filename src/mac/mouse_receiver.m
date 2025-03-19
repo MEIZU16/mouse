@@ -146,39 +146,22 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
         printf("按钮处理: 发送拖动事件，按钮状态: %d\n", current_buttons);
     }
     
-    // 右键处理（简化，不处理双击）
-    if (changed_buttons & 0x04) {
-        if (current_buttons & 0x04) {
-            // 右键按下
-            CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                kCGEventRightMouseDown, point, kCGMouseButtonRight);
-            CGEventPost(kCGHIDEventTap, event);
-            CFRelease(event);
-        } else {
-            // 右键释放
-            CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                kCGEventRightMouseUp, point, kCGMouseButtonRight);
-            CGEventPost(kCGHIDEventTap, event);
-            CFRelease(event);
-        }
-    } else if (current_buttons & 0x04) {
-        // 右键保持按下，发送拖动事件
-        CGEventRef event = CGEventCreateMouseEvent(NULL, 
-            kCGEventRightMouseDragged, point, kCGMouseButtonRight);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
-    }
-    
-    // 中键处理（简化，不处理双击）
+    // 中键处理
     if (changed_buttons & 0x02) {
+        button_state_changed = true;
+        
         if (current_buttons & 0x02) {
             // 中键按下
+            printf("按钮处理: 中键按下，按钮状态: %d\n", current_buttons);
+            
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventOtherMouseDown, point, kCGMouseButtonCenter);
             CGEventPost(kCGHIDEventTap, event);
             CFRelease(event);
         } else {
             // 中键释放
+            printf("按钮处理: 中键释放，按钮状态: %d\n", current_buttons);
+            
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventOtherMouseUp, point, kCGMouseButtonCenter);
             CGEventPost(kCGHIDEventTap, event);
@@ -188,6 +171,35 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
         // 中键保持按下，发送拖动事件
         CGEventRef event = CGEventCreateMouseEvent(NULL, 
             kCGEventOtherMouseDragged, point, kCGMouseButtonCenter);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    }
+    
+    // 右键处理
+    if (changed_buttons & 0x04) {
+        button_state_changed = true;
+        
+        if (current_buttons & 0x04) {
+            // 右键按下
+            printf("按钮处理: 右键按下，按钮状态: %d\n", current_buttons);
+            
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventRightMouseDown, point, kCGMouseButtonRight);
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        } else {
+            // 右键释放
+            printf("按钮处理: 右键释放，按钮状态: %d\n", current_buttons);
+            
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventRightMouseUp, point, kCGMouseButtonRight);
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        }
+    } else if (current_buttons & 0x04) {
+        // 右键保持按下，发送拖动事件
+        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+            kCGEventRightMouseDragged, point, kCGMouseButtonRight);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
@@ -283,160 +295,226 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
 }
 
+// 处理滚轮事件
+static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
+    // 转换滚动量到macOS期望的范围（约10倍减小使更符合macOS的滚动体验）
+    // 注意: macOS滚轮方向与Linux相反
+    CGScrollEventUnit unit = kCGScrollEventUnitPixel;  // 使用像素作为单位
+    double scaled_delta_x = -delta_x * 0.1;  // 反转并缩放X轴滚动量
+    double scaled_delta_y = -delta_y * 0.1;  // 反转并缩放Y轴滚动量
+    
+    printf("处理滚轮事件: 位置=(%.1f, %.1f), 滚动量=(%.2f, %.2f)\n", 
+           point.x, point.y, scaled_delta_x, scaled_delta_y);
+    
+    // 创建滚轮事件，传入两个轴的滚动量
+    CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
+        NULL,              // 默认源
+        unit,              // 滚动单位
+        2,                 // 滚动轴数量
+        (int32_t)scaled_delta_y,  // Y轴滚动量（主滚动轴）
+        (int32_t)scaled_delta_x   // X轴滚动量（水平滚动）
+    );
+    
+    // 将滚轮事件发送到系统
+    CGEventPost(kCGHIDEventTap, scrollEvent);
+    
+    // 释放事件对象
+    CFRelease(scrollEvent);
+    
+    // 更新鼠标位置
+    state->last_position = point;
+}
+
 // 处理消息回调
 void message_callback(const Message* msg, size_t __unused msg_size, void* user_data) {
     AppState *state = (AppState *)user_data;
     
-    // 只处理鼠标移动消息
-    if (msg->type == MSG_MOUSE_MOVE) {
-        const MouseMoveMessage *mouse_msg = (const MouseMoveMessage *)msg;
-        
-        // 计算绝对坐标（确保相对位置正确映射到Mac屏幕）
-        // 相对位置从Linux端传来，范围为0.0-1.0，表示在屏幕上的相对位置
-        CGFloat abs_x = mouse_msg->rel_x * state->screen_width;
-        CGFloat abs_y = mouse_msg->rel_y * state->screen_height;
-        
-        // 修正坐标，确保在屏幕范围内
-        abs_x = fmax(0, fmin(abs_x, state->screen_width - 1));
-        abs_y = fmax(0, fmin(abs_y, state->screen_height - 1));
-        
-        // 记录位置信息用于调试
-        static CGFloat last_rel_x = -1, last_rel_y = -1;
-        if (fabs(mouse_msg->rel_x - last_rel_x) > 0.01 || fabs(mouse_msg->rel_y - last_rel_y) > 0.01) {
-            printf("接收到坐标: 相对=(%.3f, %.3f) -> 绝对=(%.1f, %.1f), 屏幕分辨率=%dx%d\n",
-                  mouse_msg->rel_x, mouse_msg->rel_y, abs_x, abs_y,
-                  state->screen_width, state->screen_height);
-            last_rel_x = mouse_msg->rel_x;
-            last_rel_y = mouse_msg->rel_y;
-        }
-        
-        CGPoint point = CGPointMake(abs_x, abs_y);
-        
-        // 检查消息ID，避免重复处理
-        if (mouse_msg->timestamp == state->last_message_id) {
-            return;
-        }
-        
-        // 保存当前消息ID
-        state->last_message_id = mouse_msg->timestamp;
-        
-        // 输出接收到的原始按钮状态
-        printf("接收到消息: 按钮状态=%d\n", mouse_msg->buttons);
-        
-        // 检查按钮状态变化
-        bool button_changed = mouse_msg->buttons != state->last_buttons;
-        
-        if (button_changed) {
-            printf("按钮状态变化：从 %d 变为 %d\n", state->last_buttons, mouse_msg->buttons);
+    // 处理不同类型的消息
+    switch (msg->type) {
+        case MSG_MOUSE_MOVE: {
+            // 鼠标移动消息处理
+            const MouseMoveMessage *mouse_msg = (const MouseMoveMessage *)msg;
             
-            // 获取旧状态
-            uint8_t old_buttons = state->last_buttons;
+            // 计算绝对坐标（确保相对位置正确映射到Mac屏幕）
+            // 相对位置从Linux端传来，范围为0.0-1.0，表示在屏幕上的相对位置
+            CGFloat abs_x = mouse_msg->rel_x * state->screen_width;
+            CGFloat abs_y = mouse_msg->rel_y * state->screen_height;
             
-            // 更新按钮状态
-            state->last_buttons = mouse_msg->buttons;
+            // 修正坐标，确保在屏幕范围内
+            abs_x = fmax(0, fmin(abs_x, state->screen_width - 1));
+            abs_y = fmax(0, fmin(abs_y, state->screen_height - 1));
             
-            // 处理按钮事件
-            if ((old_buttons & 0x01) == 0 && (mouse_msg->buttons & 0x01)) {
-                // 从未按下变为按下 - 左键按下事件
-                printf("左键按下事件\n");
-                
-                // 记录按下时间
-                NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
-                
-                // 检查是否为双击（间隔小于0.5秒）
-                NSTimeInterval click_interval = current_time - state->last_click_time;
-                if (state->enable_click_detection && 
-                    click_interval < 0.5 && click_interval > 0.01 && 
-                    state->mouseup_sent && 
-                    !state->in_drag_mode) {
-                    
-                    // 这是双击
-                    printf("检测到双击，间隔: %.3f秒\n", click_interval);
-                    state->click_count = 2;
-                } else {
-                    // 普通单击
-                    state->click_count = 1;
-                }
-                
-                // 记录时间戳
-                state->button_down_time = current_time;
-                state->last_click_time = current_time;
-                
-                state->long_press_sent = false;
-                state->mousedown_sent = true;
-                state->mouseup_sent = false;
-                state->click_processed = false;
-                state->in_drag_mode = true; // 立即进入拖动模式
-                
-                // 创建鼠标按下事件
-                CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                    kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
-                
-                // 设置点击计数
-                CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
-                
-                CGEventPost(kCGHIDEventTap, event);
-                CFRelease(event);
+            // 记录位置信息用于调试
+            static CGFloat last_rel_x = -1, last_rel_y = -1;
+            if (fabs(mouse_msg->rel_x - last_rel_x) > 0.01 || fabs(mouse_msg->rel_y - last_rel_y) > 0.01) {
+                printf("接收到坐标: 相对=(%.3f, %.3f) -> 绝对=(%.1f, %.1f), 屏幕分辨率=%dx%d\n",
+                      mouse_msg->rel_x, mouse_msg->rel_y, abs_x, abs_y,
+                      state->screen_width, state->screen_height);
+                last_rel_x = mouse_msg->rel_x;
+                last_rel_y = mouse_msg->rel_y;
             }
-            else if ((old_buttons & 0x01) && (mouse_msg->buttons & 0x01) == 0) {
-                // 从按下变为未按下 - 左键释放事件
-                printf("左键释放事件\n");
+            
+            CGPoint point = CGPointMake(abs_x, abs_y);
+            
+            // 检查消息ID，避免重复处理
+            if (mouse_msg->timestamp == state->last_message_id) {
+                return;
+            }
+            
+            // 保存当前消息ID
+            state->last_message_id = mouse_msg->timestamp;
+            
+            // 输出接收到的原始按钮状态
+            printf("接收到消息: 按钮状态=%d\n", mouse_msg->buttons);
+            
+            // 检查按钮状态变化
+            bool button_changed = mouse_msg->buttons != state->last_buttons;
+            
+            if (button_changed) {
+                printf("按钮状态变化：从 %d 变为 %d\n", state->last_buttons, mouse_msg->buttons);
                 
-                if (state->mousedown_sent && !state->mouseup_sent) {
-                    state->mousedown_sent = false;
-                    state->mouseup_sent = true;
-                    state->in_drag_mode = false;
+                // 获取旧状态
+                uint8_t old_buttons = state->last_buttons;
+                
+                // 更新按钮状态
+                state->last_buttons = mouse_msg->buttons;
+                
+                // 处理按钮事件
+                if ((old_buttons & 0x01) == 0 && (mouse_msg->buttons & 0x01)) {
+                    // 从未按下变为按下 - 左键按下事件
+                    printf("左键按下事件\n");
                     
-                    // 创建鼠标释放事件
+                    // 记录按下时间
+                    NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+                    
+                    // 检查是否为双击（间隔小于0.5秒）
+                    NSTimeInterval click_interval = current_time - state->last_click_time;
+                    if (state->enable_click_detection && 
+                        click_interval < 0.5 && click_interval > 0.01 && 
+                        state->mouseup_sent && 
+                        !state->in_drag_mode) {
+                        
+                        // 这是双击
+                        printf("检测到双击，间隔: %.3f秒\n", click_interval);
+                        state->click_count = 2;
+                    } else {
+                        // 普通单击
+                        state->click_count = 1;
+                    }
+                    
+                    // 记录时间戳
+                    state->button_down_time = current_time;
+                    state->last_click_time = current_time;
+                    
+                    state->long_press_sent = false;
+                    state->mousedown_sent = true;
+                    state->mouseup_sent = false;
+                    state->click_processed = false;
+                    state->in_drag_mode = true; // 立即进入拖动模式
+                    
+                    // 创建鼠标按下事件
                     CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                        kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+                        kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
                     
                     // 设置点击计数
                     CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
                     
                     CGEventPost(kCGHIDEventTap, event);
                     CFRelease(event);
+                }
+                else if ((old_buttons & 0x01) && (mouse_msg->buttons & 0x01) == 0) {
+                    // 从按下变为未按下 - 左键释放事件
+                    printf("左键释放事件\n");
                     
-                    // 重置状态
-                    state->long_press_sent = false;
-                    state->double_click_pending = false;
-                    state->click_processed = true;
+                    if (state->mousedown_sent && !state->mouseup_sent) {
+                        state->mousedown_sent = false;
+                        state->mouseup_sent = true;
+                        state->in_drag_mode = false;
+                        
+                        // 创建鼠标释放事件
+                        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                            kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+                        
+                        // 设置点击计数
+                        CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
+                        
+                        CGEventPost(kCGHIDEventTap, event);
+                        CFRelease(event);
+                        
+                        // 重置状态
+                        state->long_press_sent = false;
+                        state->double_click_pending = false;
+                        state->click_processed = true;
+                    }
+                }
+                // 处理其他按钮状态变化
+                else {
+                    handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
                 }
             }
-            // 处理其他按钮状态变化
+            // 没有按钮状态变化，只有位置变化
             else {
-                handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
-            }
-        }
-        // 没有按钮状态变化，只有位置变化
-        else {
-            // 处理位置变化
-            // 总是移动鼠标到新位置
-            CGWarpMouseCursorPosition(point);
-            
-            // 如果左键按下状态，发送拖动事件
-            if ((mouse_msg->buttons & 0x01) && state->mousedown_sent && !state->mouseup_sent) {
-                // printf("拖动事件\n"); // 减少日志输出
+                // 处理位置变化
+                // 总是移动鼠标到新位置
+                CGWarpMouseCursorPosition(point);
                 
-                // 发送拖动事件
-                CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
-                    kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
-                CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, state->click_count);
-                CGEventPost(kCGHIDEventTap, drag_event);
-                CFRelease(drag_event);
+                // 如果左键按下状态，发送拖动事件
+                if ((mouse_msg->buttons & 0x01) && state->mousedown_sent && !state->mouseup_sent) {
+                    // printf("拖动事件\n"); // 减少日志输出
+                    
+                    // 发送拖动事件
+                    CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
+                        kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+                    CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, state->click_count);
+                    CGEventPost(kCGHIDEventTap, drag_event);
+                    CFRelease(drag_event);
+                }
+                // 普通移动
+                else if (mouse_msg->buttons == 0) {
+                    // 发送普通的鼠标移动事件
+                    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+                    CGEventPost(kCGHIDEventTap, event);
+                    CFRelease(event);
+                }
+                
+                // 更新位置
+                state->last_position = point;
+                state->last_move_time = [[NSDate date] timeIntervalSince1970];
             }
-            // 普通移动
-            else if (mouse_msg->buttons == 0) {
-                // 发送普通的鼠标移动事件
-                CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
-                CGEventPost(kCGHIDEventTap, event);
-                CFRelease(event);
+            break;
+        }
+        
+        case MSG_SCROLL: {
+            // 滚轮事件消息处理
+            const ScrollMessage *scroll_msg = (const ScrollMessage *)msg;
+            
+            // 计算绝对坐标
+            CGFloat abs_x = scroll_msg->rel_x * state->screen_width;
+            CGFloat abs_y = scroll_msg->rel_y * state->screen_height;
+            
+            // 修正坐标，确保在屏幕范围内
+            abs_x = fmax(0, fmin(abs_x, state->screen_width - 1));
+            abs_y = fmax(0, fmin(abs_y, state->screen_height - 1));
+            
+            CGPoint point = CGPointMake(abs_x, abs_y);
+            
+            // 检查消息ID，避免重复处理
+            if (scroll_msg->timestamp == state->last_message_id) {
+                return;
             }
             
-            // 更新位置
-            state->last_position = point;
-            state->last_move_time = [[NSDate date] timeIntervalSince1970];
+            // 保存当前消息ID
+            state->last_message_id = scroll_msg->timestamp;
+            
+            // 处理滚轮事件
+            handle_scroll(state, point, scroll_msg->delta_x, scroll_msg->delta_y);
+            break;
         }
+        
+        // 可以添加其他消息类型的处理
+        default:
+            // 忽略未知的消息类型
+            break;
     }
 }
 

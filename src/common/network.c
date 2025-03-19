@@ -240,6 +240,24 @@ bool network_send_mouse_move(NetworkContext* ctx, float rel_x, float rel_y, uint
     return network_send_message(ctx, &msg, sizeof(mouse_msg));
 }
 
+// 快捷方法：发送滚轮事件消息
+bool network_send_scroll(NetworkContext* ctx, float rel_x, float rel_y, float delta_x, float delta_y) {
+    if (!ctx) return false;
+    
+    ScrollMessage scroll_msg;
+    scroll_msg.type = MSG_SCROLL;
+    scroll_msg.rel_x = rel_x;
+    scroll_msg.rel_y = rel_y;
+    scroll_msg.delta_x = delta_x;
+    scroll_msg.delta_y = delta_y;
+    scroll_msg.timestamp = get_timestamp_ms();
+    
+    Message msg;
+    memcpy(&msg, &scroll_msg, sizeof(scroll_msg));
+    
+    return network_send_message(ctx, &msg, sizeof(scroll_msg));
+}
+
 // 接收消息
 bool network_receive_message(NetworkContext* ctx, Message* msg, size_t* msg_size) {
     if (!ctx || !msg || !msg_size) return false;
@@ -278,6 +296,9 @@ bool network_receive_message(NetworkContext* ctx, Message* msg, size_t* msg_size
     switch (type) {
         case MSG_MOUSE_MOVE:
             expected_size = sizeof(MouseMoveMessage);
+            break;
+        case MSG_SCROLL:
+            expected_size = sizeof(ScrollMessage);
             break;
         case MSG_CONNECT:
             expected_size = sizeof(ConnectMessage);
