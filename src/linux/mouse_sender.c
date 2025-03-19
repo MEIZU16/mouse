@@ -7,6 +7,8 @@
 #include <string.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <math.h>
+#include <errno.h>
 #include "../common/network.h"
 
 // 全局状态
@@ -25,6 +27,7 @@ static bool force_send = false;    // 强制发送标志
 
 // 信号处理
 void handle_signal(int sig) {
+    (void)sig; // 避免未使用警告
     running = 0;
 }
 
@@ -70,13 +73,12 @@ char *find_mouse_device() {
 
 // 发送线程函数
 void *send_thread_func(void *arg) {
-    uint64_t last_message_counter = 0;
+    (void)arg; // 避免未使用警告
     
     while (running) {
         // 准备消息
         MouseMoveMessage msg;
-        msg.header.type = MSG_MOUSE_MOVE;
-        msg.header.size = sizeof(MouseMoveMessage);
+        msg.type = MSG_MOUSE_MOVE; // 修正：直接设置type字段，而不是header.type
         msg.rel_x = last_rel_x;
         msg.rel_y = last_rel_y;
         msg.buttons = button_state;
@@ -88,13 +90,13 @@ void *send_thread_func(void *arg) {
         // 3. 强制发送标志为真
         if (force_send || button_state != last_sent_button_state) {
             // 发送消息
-            if (network_send_message(network, (Message*)&msg) == 0) {
-                printf("发送鼠标移动消息: x=%.2f, y=%.2f, 按钮=%u, ID=%llu\n", 
-                       msg.rel_x, msg.rel_y, msg.buttons, msg.timestamp);
+            if (network_send_message(network, (Message*)&msg, sizeof(msg)) == 0) { // 修正：添加消息大小参数
+                printf("发送鼠标移动消息: x=%.2f, y=%.2f, 按钮=%u, ID=%lu\n", 
+                       msg.rel_x, msg.rel_y, msg.buttons, (unsigned long)msg.timestamp); // 修正：使用正确的格式说明符
                 
                 // 更新上次发送的按钮状态
                 last_sent_button_state = button_state;
-                last_message_counter = message_counter++;
+                message_counter++; // 修改：直接更新计数器，不需要中间变量
                 force_send = false;
             } else {
                 fprintf(stderr, "发送消息失败\n");
@@ -110,6 +112,9 @@ void *send_thread_func(void *arg) {
 
 // 处理鼠标事件
 void process_mouse_event(struct input_event *ev, double screen_width, double screen_height) {
+    (void)screen_width;  // 避免未使用警告
+    (void)screen_height; // 避免未使用警告
+    
     static int dx = 0, dy = 0;
     static bool moved = false;
     
@@ -171,7 +176,7 @@ void process_mouse_event(struct input_event *ev, double screen_width, double scr
         if (last_rel_y > 1.0) last_rel_y = 1.0;
         
         // 如果移动足够大，设置force_send为true
-        if (abs(rel_x) > move_threshold || abs(rel_y) > move_threshold) {
+        if (fabs(rel_x) > move_threshold || fabs(rel_y) > move_threshold) { // 修正：使用fabs替代abs
             force_send = true;
         }
         
@@ -186,7 +191,7 @@ int main(int argc, char **argv) {
     char *device_path;
     int fd;
     uint16_t port = DEFAULT_PORT;
-    char server_address[256] = DEFAULT_SERVER;
+    char server_address[256] = "127.0.0.1"; // 默认为本地回环地址
     
     // 处理命令行参数
     for (int i = 1; i < argc; i++) {
@@ -252,17 +257,19 @@ int main(int argc, char **argv) {
         
         if (n == sizeof(ev)) {
             process_mouse_event(&ev, screen_width, screen_height);
-        } else if (n < 0) {
+        } else if (n < 0 && errno != EINTR) {
             perror("读取鼠标事件失败");
             break;
         }
     }
     
-    // 清理
+    // 等待发送线程结束
     pthread_join(send_thread, NULL);
+    
+    // 清理
     network_cleanup(network);
     close(fd);
     
-    printf("程序已退出\n");
+    printf("程序正常退出\n");
     return 0;
 } 
