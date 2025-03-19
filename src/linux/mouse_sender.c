@@ -256,36 +256,42 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
         float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
         
-        // 初始化滚动量 - 使用更大的固定值
+        // 初始化滚动量 - 简化为方向指示
         float delta_x = 0.0;
         float delta_y = 0.0;
         
-        // 根据滚动方向设置固定滚动量 - 使用非常大的值来确保效果
+        // 根据滚动方向设置简单的值，便于接收端判断
         switch (event->direction) {
             case GDK_SCROLL_UP:
-                delta_y = -20.0; // 向上滚动 - 大值
+                delta_y = -1.0; // 向上滚动 - 简单的负值
+                printf("检测到向上滚动\n");
                 break;
             case GDK_SCROLL_DOWN:
-                delta_y = 20.0;  // 向下滚动 - 大值
+                delta_y = 1.0;  // 向下滚动 - 简单的正值
+                printf("检测到向下滚动\n");
                 break;
             case GDK_SCROLL_LEFT:
-                delta_x = -20.0; // 向左滚动 - 大值
+                delta_x = -1.0; // 向左滚动 - 简单的负值
+                printf("检测到向左滚动\n");
                 break;
             case GDK_SCROLL_RIGHT:
-                delta_x = 20.0;  // 向右滚动 - 大值
+                delta_x = 1.0;  // 向右滚动 - 简单的正值
+                printf("检测到向右滚动\n");
                 break;
             case GDK_SCROLL_SMOOTH:
                 // 从事件中获取滚动增量
                 gdouble dx = 0.0, dy = 0.0;
                 gdk_event_get_scroll_deltas((GdkEvent*)event, &dx, &dy);
                 
-                // 根据方向设置固定大小值
-                if (fabs(dx) > 0.0) {
-                    delta_x = (dx > 0) ? 20.0 : -20.0;
-                }
-                
-                if (fabs(dy) > 0.0) {
-                    delta_y = (dy > 0) ? 20.0 : -20.0;
+                // 简化为方向，忽略大小
+                if (fabs(dx) > fabs(dy)) {
+                    // 水平滚动更明显
+                    delta_x = (dx > 0) ? 1.0 : -1.0;
+                    printf("检测到平滑滚动（水平方向：%s)\n", delta_x > 0 ? "右" : "左");
+                } else if (fabs(dy) > 0.1) {
+                    // 垂直滚动更明显
+                    delta_y = (dy > 0) ? 1.0 : -1.0;
+                    printf("检测到平滑滚动（垂直方向：%s)\n", delta_y > 0 ? "下" : "上");
                 }
                 break;
             default:
@@ -295,19 +301,16 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         // 只有在有滚动时才发送事件
         if (delta_x != 0.0 || delta_y != 0.0) {
             // 发送滚轮事件
-            printf("发送滚轮事件: 位置=(%.3f, %.3f), 滚动量=(%.1f, %.1f)\n", 
+            printf("发送滚轮事件: 位置=(%.3f, %.3f), 方向值=(%.0f, %.0f)\n", 
                    rel_x, rel_y, delta_x, delta_y);
             
-            // 发送多个滚轮事件确保效果
-            for (int i = 0; i < 2; i++) {
-                if (!network_send_scroll(state->network, rel_x, rel_y, delta_x, delta_y)) {
-                    printf("发送滚轮事件失败\n");
-                    break;
-                }
-                usleep(5000); // 短暂等待
+            // 发送滚轮事件
+            if (!network_send_scroll(state->network, rel_x, rel_y, delta_x, delta_y)) {
+                printf("发送滚轮事件失败\n");
             }
             
-            // 发送一个鼠标移动事件确保不丢失控制
+            // 延迟一下再发送鼠标移动事件以保持控制
+            usleep(10000); // 10ms等待
             network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
         }
     }

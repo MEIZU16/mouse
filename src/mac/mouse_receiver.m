@@ -303,62 +303,69 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
 }
 
-// 处理滚轮事件 - 尝试多种方法实现滚轮控制
+// 处理滚轮事件 - 使用键盘模拟
 static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
     // 先确保鼠标在正确位置
     CGWarpMouseCursorPosition(point);
     
-    // macOS中，负值表示向上/向左滚动，正值表示向下/向右滚动
-    // 这与GTK的约定相反，所以我们需要反转方向
-    CGFloat scroll_y = -delta_y * 15.0; // 使用大值
-    CGFloat scroll_x = -delta_x * 15.0; // 使用大值
+    // 确定滚动方向(简化为上下左右四个方向)
+    bool scroll_up = delta_y < 0;
+    bool scroll_down = delta_y > 0;
+    bool scroll_left = delta_x < 0;
+    bool scroll_right = delta_x > 0;
     
-    // 打印调试信息
-    printf("处理滚轮事件: 位置=(%.1f, %.1f), 滚动量=(%.1f, %.1f)\n", 
-           point.x, point.y, scroll_x, scroll_y);
+    printf("处理滚轮事件: 位置=(%.1f, %.1f), 方向: %s%s%s%s\n", 
+           point.x, point.y, 
+           scroll_up ? "上 " : "",
+           scroll_down ? "下 " : "",
+           scroll_left ? "左 " : "",
+           scroll_right ? "右 " : "");
     
     @autoreleasepool {
-        // 方法1: 使用CGEvent直接发送滚轮事件
-        // 创建垂直和水平滚轮事件
-        CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
-            NULL,                   // 默认源
-            kCGScrollEventUnitLine, // 使用行作为单位
-            2,                      // 两轴
-            (int32_t)scroll_y,      // 垂直滚动量
-            (int32_t)scroll_x       // 水平滚动量
-        );
+        // 使用AppleScript模拟键盘事件来代替滚轮事件
+        // 在macOS上，Page Up/Down/左右箭头通常能实现类似滚轮的功能
+        NSString *scriptText = nil;
         
-        if (scrollEvent) {
-            // 设置事件位置
-            CGEventSetLocation(scrollEvent, point);
+        if (scroll_up) {
+            // 使用Page Up键模拟向上滚动
+            scriptText = @"tell application \"System Events\"\n"
+                         @"  key code 116\n" // Page Up键
+                         @"end tell";
+        } else if (scroll_down) {
+            // 使用Page Down键模拟向下滚动
+            scriptText = @"tell application \"System Events\"\n"
+                         @"  key code 121\n" // Page Down键
+                         @"end tell";
+        } else if (scroll_left) {
+            // 使用左箭头键模拟向左滚动
+            scriptText = @"tell application \"System Events\"\n"
+                         @"  key code 123\n" // 左箭头键
+                         @"end tell";
+        } else if (scroll_right) {
+            // 使用右箭头键模拟向右滚动
+            scriptText = @"tell application \"System Events\"\n"
+                         @"  key code 124\n" // 右箭头键
+                         @"end tell";
+        }
+        
+        // 执行AppleScript
+        if (scriptText) {
+            NSAppleScript *script = [[NSAppleScript alloc] initWithSource:scriptText];
+            NSDictionary *error = nil;
+            [script executeAndReturnError:&error];
             
-            // 发送事件
-            CGEventPost(kCGSessionEventTap, scrollEvent);
-            CFRelease(scrollEvent);
-            
-            // 临时等待让系统处理滚轮事件
-            usleep(5000); // 5毫秒
-            
-            // 方法2: 再次使用CGEvent但通过HID接口发送
-            CGEventRef scrollEvent2 = CGEventCreateScrollWheelEvent(
-                NULL, 
-                kCGScrollEventUnitPixel, 
-                2, 
-                (int32_t)(scroll_y * 2), // 使用更大值
-                (int32_t)(scroll_x * 2)  // 使用更大值
-            );
-            
-            if (scrollEvent2) {
-                CGEventSetLocation(scrollEvent2, point);
-                CGEventPost(kCGHIDEventTap, scrollEvent2);
-                CFRelease(scrollEvent2);
+            if (error) {
+                NSLog(@"AppleScript执行错误: %@", error);
+            } else {
+                printf("已发送键盘事件模拟滚轮\n");
             }
         }
         
         // 确保鼠标位置不变
+        usleep(5000); // 短暂等待
         CGWarpMouseCursorPosition(point);
         
-        // 发送鼠标移动事件以保持控制
+        // 发送普通的鼠标移动事件以保持控制
         CGEventRef moveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
         if (moveEvent) {
             CGEventPost(kCGHIDEventTap, moveEvent);
@@ -366,7 +373,7 @@ static void handle_scroll(AppState *state, CGPoint point, float delta_x, float d
         }
     }
     
-    // 更新最后鼠标位置
+    // 更新鼠标位置
     state->last_position = point;
 }
 
