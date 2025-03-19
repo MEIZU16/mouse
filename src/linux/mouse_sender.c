@@ -103,8 +103,18 @@ static gboolean on_motion_notify(GtkWidget *widget G_GNUC_UNUSED, GdkEventMotion
     
     if (state->connected) {
         // 计算鼠标相对位置（0.0-1.0）
-        float rel_x = event->x / state->screen_width;
-        float rel_y = event->y / state->screen_height;
+        // 确保值严格在0.0到1.0之间，防止越界
+        float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
+        float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
+        
+        // 记录位置信息用于调试
+        static float last_rel_x = 0, last_rel_y = 0;
+        if (fabs(rel_x - last_rel_x) > 0.01 || fabs(rel_y - last_rel_y) > 0.01) {
+            printf("发送相对位置: 原始=(%.1f, %.1f), 相对=(%.3f, %.3f)\n", 
+                   event->x, event->y, rel_x, rel_y);
+            last_rel_x = rel_x;
+            last_rel_y = rel_y;
+        }
         
         // 发送鼠标移动消息，使用当前保存的按钮状态
         network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
@@ -122,8 +132,8 @@ static gboolean on_button_press(GtkWidget *widget G_GNUC_UNUSED, GdkEventButton 
     
     if (state->connected) {
         // 计算鼠标相对位置（0.0-1.0）
-        float rel_x = event->x / state->screen_width;
-        float rel_y = event->y / state->screen_height;
+        float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
+        float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
         
         // 按钮状态（1=左键，2=中键，3=右键）
         uint8_t buttons = 1 << (event->button - 1);
@@ -175,8 +185,8 @@ static gboolean on_button_release(GtkWidget *widget G_GNUC_UNUSED, GdkEventButto
     
     if (state->connected) {
         // 计算鼠标相对位置（0.0-1.0）
-        float rel_x = event->x / state->screen_width;
-        float rel_y = event->y / state->screen_height;
+        float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
+        float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
         
         // 计算要释放的按钮掩码
         uint8_t button_mask = 1 << (event->button - 1);

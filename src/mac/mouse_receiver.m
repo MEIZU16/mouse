@@ -291,9 +291,20 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
     if (msg->type == MSG_MOUSE_MOVE) {
         const MouseMoveMessage *mouse_msg = (const MouseMoveMessage *)msg;
         
-        // 计算绝对坐标
+        // 计算绝对坐标（确保相对位置正确映射到Mac屏幕）
+        // 相对位置从Linux端传来，范围为0.0-1.0，表示在屏幕上的相对位置
         CGFloat abs_x = mouse_msg->rel_x * state->screen_width;
         CGFloat abs_y = mouse_msg->rel_y * state->screen_height;
+        
+        // 记录位置信息用于调试
+        static CGFloat last_rel_x = 0, last_rel_y = 0;
+        if (fabs(mouse_msg->rel_x - last_rel_x) > 0.01 || fabs(mouse_msg->rel_y - last_rel_y) > 0.01) {
+            printf("接收到相对位置: (%.3f, %.3f) -> 绝对位置: (%.1f, %.1f)\n",
+                  mouse_msg->rel_x, mouse_msg->rel_y, abs_x, abs_y);
+            last_rel_x = mouse_msg->rel_x;
+            last_rel_y = mouse_msg->rel_y;
+        }
+        
         CGPoint point = CGPointMake(abs_x, abs_y);
         
         // 检查消息ID，避免重复处理
@@ -448,11 +459,25 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->long_press_timer = nil;
     state->enable_click_detection = true; // 启用点击检测
     
-    // 获取屏幕尺寸
+    // 获取屏幕尺寸（主屏幕）
     NSScreen *mainScreen = [NSScreen mainScreen];
     NSRect screenFrame = [mainScreen frame];
     state->screen_width = screenFrame.size.width;
     state->screen_height = screenFrame.size.height;
+    
+    // 输出所有连接的屏幕信息，帮助调试
+    NSArray *screens = [NSScreen screens];
+    printf("检测到%lu个屏幕:\n", (unsigned long)[screens count]);
+    for (NSUInteger i = 0; i < [screens count]; i++) {
+        NSScreen *screen = [screens objectAtIndex:i];
+        NSRect frame = [screen frame];
+        NSRect visibleFrame = [screen visibleFrame];
+        printf("  屏幕%lu: 尺寸=%.0f x %.0f, 可见区域=%.0f x %.0f, 原点=(%.0f, %.0f)\n",
+               (unsigned long)i, 
+               frame.size.width, frame.size.height,
+               visibleFrame.size.width, visibleFrame.size.height,
+               frame.origin.x, frame.origin.y);
+    }
     
     // 初始化网络
     state->network = network_init();
@@ -473,9 +498,10 @@ bool init_app(AppState *state, int argc, const char **argv) {
     
     state->running = true;
     printf("开始监听端口 %d\n", state->port);
-    printf("屏幕分辨率: %d x %d\n", state->screen_width, state->screen_height);
+    printf("使用主屏幕分辨率: %d x %d\n", state->screen_width, state->screen_height);
     printf("双击功能已启用，即时拖动功能已启用\n");
     printf("已优化为按下即可拖动模式，支持双击检测\n");
+    printf("已优化坐标映射，确保Linux和Mac屏幕位置一致\n");
     
     return true;
 }

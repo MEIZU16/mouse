@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g -O2 -I..
-LDFLAGS = $(shell pkg-config --libs gtk+-3.0 wayland-client)
+LDFLAGS = $(shell pkg-config --libs gtk+-3.0 wayland-client) -lm
 CPPFLAGS = $(shell pkg-config --cflags gtk+-3.0 wayland-client)
 
 OBJS = mouse_sender.o ../common/network.o
