@@ -24,7 +24,7 @@ typedef struct {
     bool mouseup_sent;            // 是否已发送释放事件
     bool click_processed;         // 当前点击是否已处理
     bool in_drag_mode;            // 是否处于拖动模式
-    NSTimer *long_press_timer;    // 长按检测定时器
+    CFRunLoopTimerRef long_press_timer;    // 长按检测定时器
 } AppState;
 
 // 长按检测定时器回调
@@ -125,6 +125,7 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             if (state->long_press_timer) {
                 CFRunLoopTimerInvalidate(state->long_press_timer);
                 CFRelease(state->long_press_timer);
+                state->long_press_timer = NULL;
             }
             
             CFRunLoopTimerContext context = {0, state, NULL, NULL, NULL};
@@ -454,7 +455,7 @@ void run_app(AppState *state) {
     // 创建一个计时器，定期检查接收消息
     NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.01 // 10毫秒
                                                      repeats:YES
-                                                       block:^(NSTimer *timer) {
+                                                       block:^(NSTimer *_Nonnull timer) {
         Message msg;
         size_t msg_size;
         
