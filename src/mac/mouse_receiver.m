@@ -298,41 +298,40 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
 
 // 处理滚轮事件
 static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
-    // 使用像素作为单位
-    CGScrollEventUnit unit = kCGScrollEventUnitPixel;
+    // 不需要单位参数，我们直接使用系统默认单位
+    // 注意：在macOS中，正值表示向下/向右滚动
+    int32_t wheel_y = (delta_y > 0) ? 1 : -1;  // 简化为上/下两个方向
+    int32_t wheel_x = (delta_x > 0) ? 1 : -1;  // 简化为左/右两个方向
     
-    // 根据苹果文档调整参数
-    // 在macOS中，滚轮值应该是整数，并且方向与Linux相反
-    int32_t scaled_delta_y = (int32_t)(-delta_y * 3.0);
-    int32_t scaled_delta_x = (int32_t)(-delta_x * 3.0);
+    // 如果滚动量太小，忽略它
+    if (fabs(delta_y) < 0.1) wheel_y = 0;
+    if (fabs(delta_x) < 0.1) wheel_x = 0;
     
-    printf("处理滚轮事件: 位置=(%.1f, %.1f), 原始滚动量=(%.2f, %.2f), 调整后=(%d, %d)\n", 
-           point.x, point.y, delta_x, delta_y, scaled_delta_x, scaled_delta_y);
+    // 记录日志
+    printf("处理滚轮事件: 位置=(%.1f, %.1f), 原始滚动=(%.2f, %.2f), 简化为=(%d, %d)\n", 
+           point.x, point.y, delta_x, delta_y, wheel_x, wheel_y);
     
-    // 第一步：移动鼠标到滚轮事件发生的位置
+    // 先移动鼠标到目标位置
     CGWarpMouseCursorPosition(point);
     
-    // 第二步：使用标准参数创建滚轮事件
+    // 发送滚轮事件 - 使用苹果官方推荐的方式
     CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
-        NULL,               // 默认源
-        unit,               // 滚动单位
-        2,                  // 滚动轴数量
-        scaled_delta_y,     // Y轴滚动量（主滚动轴）
-        scaled_delta_x      // X轴滚动量（水平滚动）
+        NULL,                       // 默认源
+        kCGScrollEventUnitLine,     // 使用行作为单位（比像素更可靠）
+        2,                          // 使用两个滚动轴
+        wheel_y,                    // Y轴滚动量
+        wheel_x                     // X轴滚动量
     );
     
-    // 输出详细调试信息
-    printf("发送滚轮事件: source=NULL, unit=%d, axes=2, deltaY=%d, deltaX=%d\n", 
-           unit, scaled_delta_y, scaled_delta_x);
-    
-    // 确保事件有效再发送
     if (scrollEvent) {
-        // 将滚轮事件发送到系统
+        // 直接发送滚轮事件
         CGEventPost(kCGHIDEventTap, scrollEvent);
         CFRelease(scrollEvent);
         
-        // 发送一个鼠标移动事件，确保控制不会丢失
-        CGEventRef moveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+        // 必要时再发送一个空的移动事件，确保控制权不会丢失
+        CGEventRef moveEvent = CGEventCreateMouseEvent(
+            NULL, kCGEventMouseMoved, point, kCGMouseButtonLeft);
+        
         if (moveEvent) {
             CGEventPost(kCGHIDEventTap, moveEvent);
             CFRelease(moveEvent);
@@ -518,35 +517,39 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             
             CGPoint point = CGPointMake(abs_x, abs_y);
             
-            // 检查消息ID，避免重复处理
+            // 检查是否需要处理此消息
             if (scroll_msg->timestamp == state->last_message_id) {
                 printf("忽略重复的滚轮消息 ID: %llu\n", scroll_msg->timestamp);
                 return;
             }
             
-            // 验证滚动值是否有效
-            bool valid_data = true;
-            if (isnan(scroll_msg->delta_x) || isnan(scroll_msg->delta_y) ||
-                isinf(scroll_msg->delta_x) || isinf(scroll_msg->delta_y)) {
-                printf("警告：收到无效的滚动数据 delta_x=%.2f, delta_y=%.2f\n", 
-                       scroll_msg->delta_x, scroll_msg->delta_y);
-                valid_data = false;
+            // 检查滚动值是否存在
+            if (scroll_msg->delta_x == 0 && scroll_msg->delta_y == 0) {
+                // 空滚动事件，只移动鼠标位置
+                CGWarpMouseCursorPosition(point);
+                state->last_position = point;
+                state->last_message_id = scroll_msg->timestamp;
+                return;
             }
+            
+            // 显示收到的滚轮消息
+            printf("收到滚轮消息: 位置=(%.1f, %.1f), 滚动量=(%.1f, %.1f)\n", 
+                   abs_x, abs_y, scroll_msg->delta_x, scroll_msg->delta_y);
             
             // 保存当前消息ID
             state->last_message_id = scroll_msg->timestamp;
             
-            // 只处理有效的滚动数据
-            if (valid_data) {
-                // 处理滚轮事件
-                handle_scroll(state, point, scroll_msg->delta_x, scroll_msg->delta_y);
-            } else {
-                // 即使数据无效，也移动鼠标到对应位置，确保不丢失控制
-                CGWarpMouseCursorPosition(point);
-                
-                // 更新位置
-                state->last_position = point;
+            // 处理滚轮事件
+            handle_scroll(state, point, scroll_msg->delta_x, scroll_msg->delta_y);
+            
+            // 强制发送一个鼠标移动事件，确保鼠标位置正确更新
+            CGEventRef moveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+            if (moveEvent) {
+                CGEventPost(kCGHIDEventTap, moveEvent);
+                CFRelease(moveEvent);
+                printf("已发送额外的鼠标移动事件以保持控制\n");
             }
+            
             break;
         }
         

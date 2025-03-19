@@ -255,47 +255,52 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
         float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
         
-        // 初始化滚动量
+        // 初始化滚动量 - 保持简单的方向值
         gdouble delta_x = 0.0;
         gdouble delta_y = 0.0;
         
-        // 根据滚动方向设置滚动量 - 使用适中的值
+        // 根据滚动方向设置滚动量 - 使用简单的-1/1值
         switch (event->direction) {
             case GDK_SCROLL_UP:
-                delta_y = -3.0; // 向上滚动 - 使用较小的值，防止过度滚动
+                delta_y = -1.0; // 向上滚动
                 break;
             case GDK_SCROLL_DOWN:
-                delta_y = 3.0;  // 向下滚动 - 使用较小的值，防止过度滚动
+                delta_y = 1.0;  // 向下滚动
                 break;
             case GDK_SCROLL_LEFT:
-                delta_x = -3.0; // 向左滚动 - 使用较小的值，防止过度滚动
+                delta_x = -1.0; // 向左滚动
                 break;
             case GDK_SCROLL_RIGHT:
-                delta_x = 3.0;  // 向右滚动 - 使用较小的值，防止过度滚动
+                delta_x = 1.0;  // 向右滚动
                 break;
             case GDK_SCROLL_SMOOTH:
-                // 使用精确的滚动量
+                // 使用精确的滚动量，但简化处理
                 gdk_event_get_scroll_deltas((GdkEvent*)event, &delta_x, &delta_y);
                 
-                // 对平滑滚动稍微放大，但不要过度
-                // 放大系数与Mac端一致
-                delta_x *= 1.0;
-                delta_y *= 1.0;
+                // 只保留方向信息，忽略大小
+                if (fabs(delta_x) < 0.1) delta_x = 0;
+                else delta_x = (delta_x > 0) ? 1 : -1;
+                
+                if (fabs(delta_y) < 0.1) delta_y = 0;
+                else delta_y = (delta_y > 0) ? 1 : -1;
                 break;
             default:
                 break;
         }
         
-        // 尝试通过单独的滚轮消息发送滚轮事件
-        if (network_send_scroll(state->network, rel_x, rel_y, (float)delta_x, (float)delta_y)) {
-            printf("发送滚轮事件: 位置=(%.3f, %.3f), 滚动量=(%.1f, %.1f)\n", 
-                   rel_x, rel_y, (float)delta_x, (float)delta_y);
-        } else {
-            printf("发送滚轮事件失败！\n");
+        // 只有在有实际滚动时才发送事件
+        if (delta_x != 0 || delta_y != 0) {
+            // 发送滚轮事件
+            if (network_send_scroll(state->network, rel_x, rel_y, (float)delta_x, (float)delta_y)) {
+                printf("发送滚轮事件: 位置=(%.3f, %.3f), 滚动量=(%.0f, %.0f)\n", 
+                       rel_x, rel_y, delta_x, delta_y);
+                
+                // 发送一个普通鼠标移动消息来确保控制不会丢失
+                network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
+            } else {
+                printf("发送滚轮事件失败\n");
+            }
         }
-        
-        // 发送一个鼠标移动消息，确保不会丢失控制
-        network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
     }
     
     return TRUE;
