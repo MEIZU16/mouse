@@ -259,39 +259,43 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         gdouble delta_x = 0.0;
         gdouble delta_y = 0.0;
         
-        // 根据滚动方向设置滚动量
+        // 根据滚动方向设置滚动量 - 使用适中的值
         switch (event->direction) {
             case GDK_SCROLL_UP:
-                delta_y = -10.0; // 向上滚动，增大滚动量
+                delta_y = -3.0; // 向上滚动 - 使用较小的值，防止过度滚动
                 break;
             case GDK_SCROLL_DOWN:
-                delta_y = 10.0;  // 向下滚动，增大滚动量
+                delta_y = 3.0;  // 向下滚动 - 使用较小的值，防止过度滚动
                 break;
             case GDK_SCROLL_LEFT:
-                delta_x = -10.0; // 向左滚动，增大滚动量
+                delta_x = -3.0; // 向左滚动 - 使用较小的值，防止过度滚动
                 break;
             case GDK_SCROLL_RIGHT:
-                delta_x = 10.0;  // 向右滚动，增大滚动量
+                delta_x = 3.0;  // 向右滚动 - 使用较小的值，防止过度滚动
                 break;
             case GDK_SCROLL_SMOOTH:
                 // 使用精确的滚动量
                 gdk_event_get_scroll_deltas((GdkEvent*)event, &delta_x, &delta_y);
                 
-                // 直接使用原始滚动量，不再放大
-                // Mac端会处理缩放比例
-                // 保留小量放大以确保有足够的敏感度
-                delta_x *= 5.0;
-                delta_y *= 5.0;
+                // 对平滑滚动稍微放大，但不要过度
+                // 放大系数与Mac端一致
+                delta_x *= 1.0;
+                delta_y *= 1.0;
                 break;
             default:
                 break;
         }
         
-        // 发送滚轮事件消息
-        network_send_scroll(state->network, rel_x, rel_y, (float)delta_x, (float)delta_y);
+        // 尝试通过单独的滚轮消息发送滚轮事件
+        if (network_send_scroll(state->network, rel_x, rel_y, (float)delta_x, (float)delta_y)) {
+            printf("发送滚轮事件: 位置=(%.3f, %.3f), 滚动量=(%.1f, %.1f)\n", 
+                   rel_x, rel_y, (float)delta_x, (float)delta_y);
+        } else {
+            printf("发送滚轮事件失败！\n");
+        }
         
-        printf("发送滚轮事件: 位置=(%.3f, %.3f), 滚动量=(%.1f, %.1f)\n", 
-               rel_x, rel_y, (float)delta_x, (float)delta_y);
+        // 发送一个鼠标移动消息，确保不会丢失控制
+        network_send_mouse_move(state->network, rel_x, rel_y, state->current_buttons);
     }
     
     return TRUE;

@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
+#include <math.h>
 #include "../common/network.h"
 
 // 应用程序状态
@@ -297,36 +298,48 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
 
 // 处理滚轮事件
 static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
-    // 使用像素作为单位，而不是行
+    // 使用像素作为单位
     CGScrollEventUnit unit = kCGScrollEventUnitPixel;
     
-    // 根据实际测试调整滚动灵敏度
-    // 注意：在Mac系统中，正值表示向上/向左滚动，与Linux相反
-    // 将缩放系数增大，确保滚动量足够明显
-    double scaled_delta_x = -delta_x * 2.0;  // 反转并调整X轴滚动量
-    double scaled_delta_y = -delta_y * 2.0;  // 反转并调整Y轴滚动量
+    // 根据苹果文档调整参数
+    // 在macOS中，滚轮值应该是整数，并且方向与Linux相反
+    int32_t scaled_delta_y = (int32_t)(-delta_y * 3.0);
+    int32_t scaled_delta_x = (int32_t)(-delta_x * 3.0);
     
-    printf("处理滚轮事件: 位置=(%.1f, %.1f), 原始滚动量=(%.2f, %.2f), 调整后=(%.2f, %.2f)\n", 
+    printf("处理滚轮事件: 位置=(%.1f, %.1f), 原始滚动量=(%.2f, %.2f), 调整后=(%d, %d)\n", 
            point.x, point.y, delta_x, delta_y, scaled_delta_x, scaled_delta_y);
     
-    // 创建精确滚轮事件，使用64位浮点数来传递滚动值
+    // 第一步：移动鼠标到滚轮事件发生的位置
+    CGWarpMouseCursorPosition(point);
+    
+    // 第二步：使用标准参数创建滚轮事件
     CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
-        NULL,              // 默认源
-        unit,              // 滚动单位
-        2,                 // 滚动轴数量
-        scaled_delta_y,    // Y轴滚动量（主滚动轴），不再强制转换为整数
-        scaled_delta_x     // X轴滚动量（水平滚动），不再强制转换为整数
+        NULL,               // 默认源
+        unit,               // 滚动单位
+        2,                  // 滚动轴数量
+        scaled_delta_y,     // Y轴滚动量（主滚动轴）
+        scaled_delta_x      // X轴滚动量（水平滚动）
     );
     
-    // 设置滚轮事件为精确滚动
-    // 这个函数允许使用连续滚动值，而不是离散的整数值
-    CGEventSetIntegerValueField(scrollEvent, kCGScrollWheelEventIsContinuous, 1);
+    // 输出详细调试信息
+    printf("发送滚轮事件: source=NULL, unit=%d, axes=2, deltaY=%d, deltaX=%d\n", 
+           unit, scaled_delta_y, scaled_delta_x);
     
-    // 将滚轮事件发送到系统
-    CGEventPost(kCGHIDEventTap, scrollEvent);
-    
-    // 释放事件对象
-    CFRelease(scrollEvent);
+    // 确保事件有效再发送
+    if (scrollEvent) {
+        // 将滚轮事件发送到系统
+        CGEventPost(kCGHIDEventTap, scrollEvent);
+        CFRelease(scrollEvent);
+        
+        // 发送一个鼠标移动事件，确保控制不会丢失
+        CGEventRef moveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+        if (moveEvent) {
+            CGEventPost(kCGHIDEventTap, moveEvent);
+            CFRelease(moveEvent);
+        }
+    } else {
+        printf("错误: 无法创建滚轮事件\n");
+    }
     
     // 更新鼠标位置
     state->last_position = point;
@@ -507,14 +520,33 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             
             // 检查消息ID，避免重复处理
             if (scroll_msg->timestamp == state->last_message_id) {
+                printf("忽略重复的滚轮消息 ID: %llu\n", scroll_msg->timestamp);
                 return;
+            }
+            
+            // 验证滚动值是否有效
+            bool valid_data = true;
+            if (isnan(scroll_msg->delta_x) || isnan(scroll_msg->delta_y) ||
+                isinf(scroll_msg->delta_x) || isinf(scroll_msg->delta_y)) {
+                printf("警告：收到无效的滚动数据 delta_x=%.2f, delta_y=%.2f\n", 
+                       scroll_msg->delta_x, scroll_msg->delta_y);
+                valid_data = false;
             }
             
             // 保存当前消息ID
             state->last_message_id = scroll_msg->timestamp;
             
-            // 处理滚轮事件
-            handle_scroll(state, point, scroll_msg->delta_x, scroll_msg->delta_y);
+            // 只处理有效的滚动数据
+            if (valid_data) {
+                // 处理滚轮事件
+                handle_scroll(state, point, scroll_msg->delta_x, scroll_msg->delta_y);
+            } else {
+                // 即使数据无效，也移动鼠标到对应位置，确保不丢失控制
+                CGWarpMouseCursorPosition(point);
+                
+                // 更新位置
+                state->last_position = point;
+            }
             break;
         }
         

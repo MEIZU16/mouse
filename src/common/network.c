@@ -1,5 +1,7 @@
 #include "network.h"
 #include <stdlib.h>
+#include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -9,6 +11,7 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/time.h>
+#include <math.h>
 
 struct NetworkContext {
     int socket_fd;                 // 套接字描述符
@@ -242,9 +245,24 @@ bool network_send_mouse_move(NetworkContext* ctx, float rel_x, float rel_y, uint
 
 // 快捷方法：发送滚轮事件消息
 bool network_send_scroll(NetworkContext* ctx, float rel_x, float rel_y, float delta_x, float delta_y) {
-    if (!ctx) return false;
+    if (!ctx || !ctx->connected) return false;
     
+    // 初始化滚轮事件消息
     ScrollMessage scroll_msg;
+    
+    // 校验输入数据，防止NaN或Inf值
+    if (isnan(rel_x) || isnan(rel_y) || isnan(delta_x) || isnan(delta_y) ||
+        isinf(rel_x) || isinf(rel_y) || isinf(delta_x) || isinf(delta_y)) {
+        printf("警告：滚轮事件数据无效，rel_x=%.2f, rel_y=%.2f, delta_x=%.2f, delta_y=%.2f\n", 
+              rel_x, rel_y, delta_x, delta_y);
+        return false;
+    }
+    
+    // 限制相对位置值在0.0-1.0范围内
+    rel_x = fmax(0.0f, fmin(rel_x, 1.0f));
+    rel_y = fmax(0.0f, fmin(rel_y, 1.0f));
+    
+    // 填充消息
     scroll_msg.type = MSG_SCROLL;
     scroll_msg.rel_x = rel_x;
     scroll_msg.rel_y = rel_y;
@@ -252,10 +270,16 @@ bool network_send_scroll(NetworkContext* ctx, float rel_x, float rel_y, float de
     scroll_msg.delta_y = delta_y;
     scroll_msg.timestamp = get_timestamp_ms();
     
+    // 创建消息联合体并发送
     Message msg;
     memcpy(&msg, &scroll_msg, sizeof(scroll_msg));
     
-    return network_send_message(ctx, &msg, sizeof(scroll_msg));
+    // 发送消息并返回结果
+    bool sent = network_send_message(ctx, &msg, sizeof(scroll_msg));
+    if (!sent) {
+        printf("发送滚轮事件失败，可能是网络问题\n");
+    }
+    return sent;
 }
 
 // 接收消息
