@@ -1,7 +1,14 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #include <math.h>
+#include <unistd.h>
 #include "../common/network.h"
+
+// 添加IOKit头文件和系统框架
+#import <IOKit/hidsystem/IOHIDLib.h>
+#import <IOKit/hidsystem/IOHIDParameter.h>
+#import <IOKit/hidsystem/event_status_driver.h>
+#import <ApplicationServices/ApplicationServices.h>
 
 // 应用程序状态
 typedef struct {
@@ -296,58 +303,70 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
 }
 
-// 处理滚轮事件
+// 处理滚轮事件 - 尝试多种方法实现滚轮控制
 static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
-    // 先移动鼠标到目标位置，确保滚轮事件发生在正确位置
+    // 先确保鼠标在正确位置
     CGWarpMouseCursorPosition(point);
     
-    // Mac系统上需要特殊处理滚轮事件，我们使用另一个方法
-    // 创建一个NSEvent来模拟滚轮事件
+    // macOS中，负值表示向上/向左滚动，正值表示向下/向右滚动
+    // 这与GTK的约定相反，所以我们需要反转方向
+    CGFloat scroll_y = -delta_y * 15.0; // 使用大值
+    CGFloat scroll_x = -delta_x * 15.0; // 使用大值
     
-    // 1. 确定滚动方向（macOS中正值表示向下/向右滚动）
-    // 使用更大的滚动量来确保能看到效果
-    CGFloat scroll_y = -delta_y * 5.0; // 负号是因为Mac和Linux方向相反
-    CGFloat scroll_x = -delta_x * 5.0;
-    
-    printf("创建滚轮事件: 位置=(%.1f, %.1f), 滚动量=(%.1f, %.1f)\n", 
+    // 打印调试信息
+    printf("处理滚轮事件: 位置=(%.1f, %.1f), 滚动量=(%.1f, %.1f)\n", 
            point.x, point.y, scroll_x, scroll_y);
     
-    // 2. 创建并发送滚轮事件
     @autoreleasepool {
-        // 创建一个滚轮事件
+        // 方法1: 使用CGEvent直接发送滚轮事件
+        // 创建垂直和水平滚轮事件
         CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
-            NULL, 
-            kCGScrollEventUnitPixel, 
-            2,                 // 使用2个轴：垂直和水平
-            (int32_t)scroll_y, // 垂直滚动
-            (int32_t)scroll_x  // 水平滚动
+            NULL,                   // 默认源
+            kCGScrollEventUnitLine, // 使用行作为单位
+            2,                      // 两轴
+            (int32_t)scroll_y,      // 垂直滚动量
+            (int32_t)scroll_x       // 水平滚动量
         );
         
         if (scrollEvent) {
-            // 确保鼠标位置正确
+            // 设置事件位置
             CGEventSetLocation(scrollEvent, point);
             
-            // 发送滚轮事件
-            CGEventPost(kCGHIDEventTap, scrollEvent);
+            // 发送事件
+            CGEventPost(kCGSessionEventTap, scrollEvent);
             CFRelease(scrollEvent);
             
-            printf("滚轮事件已发送\n");
+            // 临时等待让系统处理滚轮事件
+            usleep(5000); // 5毫秒
             
-            // 等待一小段时间确保事件被处理
-            usleep(10000); // 等待10毫秒
+            // 方法2: 再次使用CGEvent但通过HID接口发送
+            CGEventRef scrollEvent2 = CGEventCreateScrollWheelEvent(
+                NULL, 
+                kCGScrollEventUnitPixel, 
+                2, 
+                (int32_t)(scroll_y * 2), // 使用更大值
+                (int32_t)(scroll_x * 2)  // 使用更大值
+            );
             
-            // 发送一个鼠标移动事件以保持控制
-            CGEventRef moveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
-            if (moveEvent) {
-                CGEventPost(kCGHIDEventTap, moveEvent);
-                CFRelease(moveEvent);
+            if (scrollEvent2) {
+                CGEventSetLocation(scrollEvent2, point);
+                CGEventPost(kCGHIDEventTap, scrollEvent2);
+                CFRelease(scrollEvent2);
             }
-        } else {
-            printf("错误: 无法创建滚轮事件\n");
+        }
+        
+        // 确保鼠标位置不变
+        CGWarpMouseCursorPosition(point);
+        
+        // 发送鼠标移动事件以保持控制
+        CGEventRef moveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+        if (moveEvent) {
+            CGEventPost(kCGHIDEventTap, moveEvent);
+            CFRelease(moveEvent);
         }
     }
     
-    // 更新鼠标位置
+    // 更新最后鼠标位置
     state->last_position = point;
 }
 
