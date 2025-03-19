@@ -10,7 +10,81 @@ typedef struct {
     int screen_height;            // 屏幕高度
     bool running;                 // 运行标志
     uint8_t last_buttons;         // 上次按钮状态
+    CGPoint last_position;        // 上次鼠标位置
+    NSTimeInterval last_move_time; // 上次移动时间
 } AppState;
+
+// 处理鼠标按钮事件
+static void handle_mouse_buttons(CGPoint point, uint8_t current_buttons, uint8_t last_buttons) {
+    uint8_t changed_buttons = current_buttons ^ last_buttons;
+    
+    // 左键
+    if (changed_buttons & 0x01) {
+        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+            (current_buttons & 0x01) ? kCGEventLeftMouseDown : kCGEventLeftMouseUp, 
+            point, kCGMouseButtonLeft);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    } else if (current_buttons & 0x01) {
+        // 左键保持按下，发送拖动事件
+        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDragged, 
+            point, kCGMouseButtonLeft);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    }
+    
+    // 中键
+    if (changed_buttons & 0x02) {
+        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+            (current_buttons & 0x02) ? kCGEventOtherMouseDown : kCGEventOtherMouseUp, 
+            point, kCGMouseButtonCenter);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    } else if (current_buttons & 0x02) {
+        // 中键保持按下，发送拖动事件
+        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventOtherMouseDragged, 
+            point, kCGMouseButtonCenter);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    }
+    
+    // 右键
+    if (changed_buttons & 0x04) {
+        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+            (current_buttons & 0x04) ? kCGEventRightMouseDown : kCGEventRightMouseUp, 
+            point, kCGMouseButtonRight);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    } else if (current_buttons & 0x04) {
+        // 右键保持按下，发送拖动事件
+        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDragged, 
+            point, kCGMouseButtonRight);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    }
+}
+
+// 处理鼠标移动
+static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_buttons) {
+    NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+    
+    // 总是移动鼠标到新位置
+    CGWarpMouseCursorPosition(point);
+    
+    // 如果没有按钮按下，且位置变化，发送移动事件
+    if (current_buttons == 0) {
+        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    } else {
+        // 如果有按钮按下，处理按钮状态（包括拖动）
+        handle_mouse_buttons(point, current_buttons, state->last_buttons);
+    }
+    
+    // 更新最后位置和时间
+    state->last_position = point;
+    state->last_move_time = current_time;
+}
 
 // 处理消息回调
 void message_callback(const Message* msg, size_t msg_size, void* user_data) {
@@ -23,44 +97,16 @@ void message_callback(const Message* msg, size_t msg_size, void* user_data) {
         // 计算绝对坐标
         CGFloat abs_x = mouse_msg->rel_x * state->screen_width;
         CGFloat abs_y = mouse_msg->rel_y * state->screen_height;
-        
-        // 移动鼠标
         CGPoint point = CGPointMake(abs_x, abs_y);
-        CGWarpMouseCursorPosition(point);
         
-        // 处理按钮事件 - 检测变化
-        uint8_t current_buttons = mouse_msg->buttons;
-        uint8_t changed_buttons = current_buttons ^ state->last_buttons;
+        // 处理鼠标移动和按钮
+        handle_mouse_move(state, point, mouse_msg->buttons);
         
-        // 左键
-        if (changed_buttons & 0x01) {
-            CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                (current_buttons & 0x01) ? kCGEventLeftMouseDown : kCGEventLeftMouseUp, 
-                point, kCGMouseButtonLeft);
-            CGEventPost(kCGHIDEventTap, event);
-            CFRelease(event);
+        // 如果按钮状态变化了，也处理按钮事件
+        if (mouse_msg->buttons != state->last_buttons) {
+            handle_mouse_buttons(point, mouse_msg->buttons, state->last_buttons);
+            state->last_buttons = mouse_msg->buttons;
         }
-        
-        // 中键
-        if (changed_buttons & 0x02) {
-            CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                (current_buttons & 0x02) ? kCGEventOtherMouseDown : kCGEventOtherMouseUp, 
-                point, kCGMouseButtonCenter);
-            CGEventPost(kCGHIDEventTap, event);
-            CFRelease(event);
-        }
-        
-        // 右键
-        if (changed_buttons & 0x04) {
-            CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                (current_buttons & 0x04) ? kCGEventRightMouseDown : kCGEventRightMouseUp, 
-                point, kCGMouseButtonRight);
-            CGEventPost(kCGHIDEventTap, event);
-            CFRelease(event);
-        }
-        
-        // 更新按钮状态
-        state->last_buttons = current_buttons;
     }
 }
 
@@ -70,6 +116,8 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
     state->running = false;
     state->last_buttons = 0; // 初始化按钮状态
+    state->last_position = CGPointMake(0, 0);
+    state->last_move_time = [[NSDate date] timeIntervalSince1970];
     
     // 获取屏幕尺寸
     NSScreen *mainScreen = [NSScreen mainScreen];
