@@ -296,11 +296,16 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
         CGFloat abs_x = mouse_msg->rel_x * state->screen_width;
         CGFloat abs_y = mouse_msg->rel_y * state->screen_height;
         
+        // 修正坐标，确保在屏幕范围内
+        abs_x = fmax(0, fmin(abs_x, state->screen_width - 1));
+        abs_y = fmax(0, fmin(abs_y, state->screen_height - 1));
+        
         // 记录位置信息用于调试
-        static CGFloat last_rel_x = 0, last_rel_y = 0;
+        static CGFloat last_rel_x = -1, last_rel_y = -1;
         if (fabs(mouse_msg->rel_x - last_rel_x) > 0.01 || fabs(mouse_msg->rel_y - last_rel_y) > 0.01) {
-            printf("接收到相对位置: (%.3f, %.3f) -> 绝对位置: (%.1f, %.1f)\n",
-                  mouse_msg->rel_x, mouse_msg->rel_y, abs_x, abs_y);
+            printf("接收到坐标: 相对=(%.3f, %.3f) -> 绝对=(%.1f, %.1f), 屏幕分辨率=%dx%d\n",
+                  mouse_msg->rel_x, mouse_msg->rel_y, abs_x, abs_y,
+                  state->screen_width, state->screen_height);
             last_rel_x = mouse_msg->rel_x;
             last_rel_y = mouse_msg->rel_y;
         }
@@ -316,8 +321,7 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
         state->last_message_id = mouse_msg->timestamp;
         
         // 输出接收到的原始按钮状态
-        printf("接收到消息: 按钮状态=%d, 位置=(%.1f, %.1f)\n", 
-               mouse_msg->buttons, abs_x, abs_y);
+        printf("接收到消息: 按钮状态=%d\n", mouse_msg->buttons);
         
         // 检查按钮状态变化
         bool button_changed = mouse_msg->buttons != state->last_buttons;
@@ -412,7 +416,7 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             
             // 如果左键按下状态，发送拖动事件
             if ((mouse_msg->buttons & 0x01) && state->mousedown_sent && !state->mouseup_sent) {
-                printf("拖动事件\n");
+                // printf("拖动事件\n"); // 减少日志输出
                 
                 // 发送拖动事件
                 CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
