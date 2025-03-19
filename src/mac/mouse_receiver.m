@@ -303,46 +303,34 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
 }
 
-// 处理滚轮事件 - 完全简化版本，避免复杂处理
+// 处理滚轮事件 - 极简实现，避免任何复杂处理
 static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
-    // 记录原始滚轮值，但不执行过多处理
-    printf("[DEBUG] 处理滚轮: 原始值=(%.2f, %.2f)\n", delta_x, delta_y);
+    // 创建最基本的滚轮事件，使用固定数值1作为滚动单位
+    int scroll_y = 0;
+    int scroll_x = 0;
     
-    // 转换滚轮数值，反转方向，确保值很小，避免过大
-    double scroll_y = -delta_y * 0.1; // 缩小数值到十分之一
-    double scroll_x = -delta_x * 0.1; // 缩小数值到十分之一
+    // 仅使用方向信息，忽略大小
+    if (delta_y > 0) scroll_y = 1;
+    else if (delta_y < 0) scroll_y = -1;
     
-    // 极小值处理为0，避免过于敏感
-    if (fabs(scroll_y) < 0.01) scroll_y = 0.0;
-    if (fabs(scroll_x) < 0.01) scroll_x = 0.0;
+    if (delta_x > 0) scroll_x = 1;
+    else if (delta_x < 0) scroll_x = -1;
     
-    // 限制最大值
-    if (scroll_y > 0.3) scroll_y = 0.3;
-    else if (scroll_y < -0.3) scroll_y = -0.3;
-    
-    if (scroll_x > 0.3) scroll_x = 0.3;
-    else if (scroll_x < -0.3) scroll_x = -0.3;
-    
-    // 使用线单位 (line)，而不是像素单位，线单位更加平滑
+    // 创建最基本的滚轮事件
     CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
         NULL,                    // 默认源
         kCGScrollEventUnitLine,  // 使用线单位
         2,                       // 2轴滚动
-        (int32_t)round(scroll_y), // 向下取整
-        (int32_t)round(scroll_x)  // 向下取整
+        scroll_y,                // 垂直滚动，固定为±1
+        scroll_x                 // 水平滚动，固定为±1
     );
     
     if (scrollEvent) {
-        // 发送滚轮事件，然后立即释放
+        // 立即发送事件
         CGEventPost(kCGHIDEventTap, scrollEvent);
         CFRelease(scrollEvent);
-        printf("[DEBUG] 发送滚轮事件: (%.2f, %.2f) -> (%d, %d)\n", 
-               scroll_y, scroll_x, (int32_t)round(scroll_y), (int32_t)round(scroll_x));
-    } else {
-        printf("[ERROR] 无法创建滚轮事件\n");
+        printf("[DEBUG] 发送极简滚轮事件: Y=%d, X=%d\n", scroll_y, scroll_x);
     }
-    
-    // 不需要更新鼠标位置，避免竞争条件
 }
 
 // 处理消息回调

@@ -245,41 +245,48 @@ bool network_send_mouse_move(NetworkContext* ctx, float rel_x, float rel_y, uint
 
 // 快捷方法：发送滚轮事件消息
 bool network_send_scroll(NetworkContext* ctx, float rel_x, float rel_y, float delta_x, float delta_y) {
-    if (!ctx || !ctx->connected) return false;
+    if (!ctx) return false;
     
-    // 初始化滚轮事件消息
-    ScrollMessage scroll_msg;
-    
-    // 校验输入数据，防止NaN或Inf值
-    if (isnan(rel_x) || isnan(rel_y) || isnan(delta_x) || isnan(delta_y) ||
-        isinf(rel_x) || isinf(rel_y) || isinf(delta_x) || isinf(delta_y)) {
-        printf("警告：滚轮事件数据无效，rel_x=%.2f, rel_y=%.2f, delta_x=%.2f, delta_y=%.2f\n", 
-              rel_x, rel_y, delta_x, delta_y);
+    // 防止连接中断
+    if (!ctx->connected) {
+        printf("[ERROR] 发送滚轮事件失败: 连接已断开\n");
         return false;
     }
     
-    // 限制相对位置值在0.0-1.0范围内
-    rel_x = fmax(0.0f, fmin(rel_x, 1.0f));
-    rel_y = fmax(0.0f, fmin(rel_y, 1.0f));
+    // 初始化滚轮事件消息
+    ScrollMessage scroll_msg;
+    memset(&scroll_msg, 0, sizeof(scroll_msg)); // 清零所有字段
     
-    // 填充消息
     scroll_msg.type = MSG_SCROLL;
     scroll_msg.rel_x = rel_x;
     scroll_msg.rel_y = rel_y;
-    scroll_msg.delta_x = delta_x;
-    scroll_msg.delta_y = delta_y;
+    
+    // 仅考虑符号，不考虑大小，统一为±1
+    scroll_msg.delta_x = (delta_x > 0) ? 1.0f : ((delta_x < 0) ? -1.0f : 0.0f);
+    scroll_msg.delta_y = (delta_y > 0) ? 1.0f : ((delta_y < 0) ? -1.0f : 0.0f);
+    
+    // 设置时间戳，避免重复消息
     scroll_msg.timestamp = get_timestamp_ms();
     
-    // 创建消息联合体并发送
+    // 准备消息
     Message msg;
+    memset(&msg, 0, sizeof(msg)); // 清零
     memcpy(&msg, &scroll_msg, sizeof(scroll_msg));
     
-    // 发送消息并返回结果
-    bool sent = network_send_message(ctx, &msg, sizeof(scroll_msg));
-    if (!sent) {
-        printf("发送滚轮事件失败，可能是网络问题\n");
+    // 打印调试信息
+    printf("[DEBUG] 准备发送滚轮事件: X=%s, Y=%s, 时间戳=%llu\n", 
+           (scroll_msg.delta_x > 0) ? "右" : ((scroll_msg.delta_x < 0) ? "左" : "无"),
+           (scroll_msg.delta_y > 0) ? "下" : ((scroll_msg.delta_y < 0) ? "上" : "无"),
+           (unsigned long long)scroll_msg.timestamp);
+    
+    // 发送消息
+    bool result = network_send_message(ctx, &msg, sizeof(scroll_msg));
+    
+    if (!result) {
+        printf("[ERROR] 滚轮事件发送失败\n");
     }
-    return sent;
+    
+    return result;
 }
 
 // 接收消息
