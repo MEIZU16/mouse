@@ -12,78 +12,149 @@ typedef struct {
     uint8_t last_buttons;         // 上次按钮状态
     CGPoint last_position;        // 上次鼠标位置
     NSTimeInterval last_move_time; // 上次移动时间
+    NSTimeInterval last_click_time; // 上次点击时间
+    bool double_click_pending;    // 双击挂起状态
+    int click_count;              // 当前点击次数
 } AppState;
 
+// 判断是否为双击
+static bool is_double_click(AppState *state, uint8_t button) {
+    NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+    NSTimeInterval double_click_time = 0.3; // 双击时间窗口(秒)
+    
+    if (current_time - state->last_click_time < double_click_time && state->double_click_pending) {
+        return true;
+    }
+    
+    state->last_click_time = current_time;
+    state->double_click_pending = true;
+    return false;
+}
+
 // 处理鼠标按钮事件
-static void handle_mouse_buttons(CGPoint point, uint8_t current_buttons, uint8_t last_buttons) {
+static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current_buttons, uint8_t last_buttons) {
     uint8_t changed_buttons = current_buttons ^ last_buttons;
+    NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
     
     // 左键
     if (changed_buttons & 0x01) {
-        CGEventRef event = CGEventCreateMouseEvent(NULL, 
-            (current_buttons & 0x01) ? kCGEventLeftMouseDown : kCGEventLeftMouseUp, 
-            point, kCGMouseButtonLeft);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
+        if (current_buttons & 0x01) {
+            // 左键按下
+            if (is_double_click(state, 0x01)) {
+                // 双击
+                state->click_count = 2;
+                state->double_click_pending = false;
+            } else {
+                // 单击
+                state->click_count = 1;
+            }
+            
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
+                
+            // 设置点击计数
+            CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
+            
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        } else {
+            // 左键释放
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+                
+            // 保持相同的点击计数
+            CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
+            
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+            
+            // 如果不是双击阶段的第一次点击，重置点击计数
+            if (!state->double_click_pending) {
+                state->click_count = 0;
+            }
+        }
     } else if (current_buttons & 0x01) {
         // 左键保持按下，发送拖动事件
-        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDragged, 
-            point, kCGMouseButtonLeft);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
-    }
-    
-    // 中键
-    if (changed_buttons & 0x02) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, 
-            (current_buttons & 0x02) ? kCGEventOtherMouseDown : kCGEventOtherMouseUp, 
-            point, kCGMouseButtonCenter);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
-    } else if (current_buttons & 0x02) {
-        // 中键保持按下，发送拖动事件
-        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventOtherMouseDragged, 
-            point, kCGMouseButtonCenter);
+            kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+            
+        // 保持相同的点击计数
+        CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
+        
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     }
     
     // 右键
     if (changed_buttons & 0x04) {
-        CGEventRef event = CGEventCreateMouseEvent(NULL, 
-            (current_buttons & 0x04) ? kCGEventRightMouseDown : kCGEventRightMouseUp, 
-            point, kCGMouseButtonRight);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
+        if (current_buttons & 0x04) {
+            // 右键按下
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventRightMouseDown, point, kCGMouseButtonRight);
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        } else {
+            // 右键释放
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventRightMouseUp, point, kCGMouseButtonRight);
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        }
     } else if (current_buttons & 0x04) {
         // 右键保持按下，发送拖动事件
-        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDragged, 
-            point, kCGMouseButtonRight);
+        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+            kCGEventRightMouseDragged, point, kCGMouseButtonRight);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
+    }
+    
+    // 中键
+    if (changed_buttons & 0x02) {
+        if (current_buttons & 0x02) {
+            // 中键按下
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventOtherMouseDown, point, kCGMouseButtonCenter);
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        } else {
+            // 中键释放
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventOtherMouseUp, point, kCGMouseButtonCenter);
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        }
+    } else if (current_buttons & 0x02) {
+        // 中键保持按下，发送拖动事件
+        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+            kCGEventOtherMouseDragged, point, kCGMouseButtonCenter);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    }
+    
+    // 若超过双击时间窗，重置双击状态
+    if (current_time - state->last_click_time > 0.5) {
+        state->double_click_pending = false;
     }
 }
 
 // 处理鼠标移动
 static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_buttons) {
-    NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
-    
     // 总是移动鼠标到新位置
     CGWarpMouseCursorPosition(point);
     
-    // 如果没有按钮按下，且位置变化，发送移动事件
+    // 如果没有按钮按下，发送移动事件
     if (current_buttons == 0) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     } else {
         // 如果有按钮按下，处理按钮状态（包括拖动）
-        handle_mouse_buttons(point, current_buttons, state->last_buttons);
+        handle_mouse_buttons(state, point, current_buttons, state->last_buttons);
     }
     
     // 更新最后位置和时间
     state->last_position = point;
-    state->last_move_time = current_time;
+    state->last_move_time = [[NSDate date] timeIntervalSince1970];
 }
 
 // 处理消息回调
@@ -104,7 +175,7 @@ void message_callback(const Message* msg, size_t msg_size, void* user_data) {
         
         // 如果按钮状态变化了，也处理按钮事件
         if (mouse_msg->buttons != state->last_buttons) {
-            handle_mouse_buttons(point, mouse_msg->buttons, state->last_buttons);
+            handle_mouse_buttons(state, point, mouse_msg->buttons, state->last_buttons);
             state->last_buttons = mouse_msg->buttons;
         }
     }
@@ -118,6 +189,9 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->last_buttons = 0; // 初始化按钮状态
     state->last_position = CGPointMake(0, 0);
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
+    state->last_click_time = 0;
+    state->double_click_pending = false;
+    state->click_count = 0;
     
     // 获取屏幕尺寸
     NSScreen *mainScreen = [NSScreen mainScreen];
@@ -145,6 +219,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->running = true;
     printf("开始监听端口 %d\n", state->port);
     printf("屏幕分辨率: %d x %d\n", state->screen_width, state->screen_height);
+    printf("支持双击和长按功能\n");
     
     return true;
 }
