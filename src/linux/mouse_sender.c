@@ -1,224 +1,268 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
+#include <unistd.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <linux/input.h>
 #include <string.h>
-#include <gtk/gtk.h>
-#include <gdk/gdkwayland.h>
-#include <wayland-client.h>
+#include <dirent.h>
+#include <pthread.h>
 #include "../common/network.h"
 
-// 程序状态
-typedef struct {
-    GtkWidget *window;             // 主窗口
-    GtkWidget *drawing_area;       // 绘图区域
-    NetworkContext *network;       // 网络上下文
-    char *server_ip;               // 服务器IP
-    uint16_t port;                 // 服务器端口
-    int screen_width;              // 屏幕宽度
-    int screen_height;             // 屏幕高度
-    bool connected;                // 是否已连接
-    bool fullscreen;               // 是否全屏
-} AppState;
+// 全局状态
+static volatile sig_atomic_t running = 1;
+static NetworkContext *network = NULL;
+static pthread_t send_thread;
+static double last_rel_x = 0.0;
+static double last_rel_y = 0.0;
+static uint8_t button_state = 0; // 全局按钮状态
+static uint8_t last_sent_button_state = 0; // 上次发送的按钮状态
+static double move_threshold = 0.001; // 移动阈值
+static int screen_width = 1920;    // 默认屏幕宽度
+static int screen_height = 1080;   // 默认屏幕高度
+static uint64_t message_counter = 1; // 消息计数器，从1开始
+static bool force_send = false;    // 强制发送标志
 
-// 显示帮助信息
-static void show_usage(const char *program_name) {
-    printf("用法: %s <服务器IP> [端口]\n\n", program_name);
-    printf("选项:\n");
-    printf("  <服务器IP>           Mac接收端的IP地址\n");
-    printf("  [端口]               Mac接收端的端口号（默认：%d）\n", DEFAULT_PORT);
-    printf("\n");
-    printf("示例:\n");
-    printf("  %s 192.168.1.100     连接到IP为192.168.1.100的Mac，使用默认端口\n", program_name);
-    printf("  %s 10.0.0.5 8888     连接到IP为10.0.0.5的Mac，使用端口8888\n", program_name);
-    printf("\n");
-    printf("其他命令:\n");
-    printf("  -h, --help           显示此帮助信息\n");
+// 信号处理
+void handle_signal(int sig) {
+    running = 0;
 }
 
-// 创建主窗口
-static void create_window(AppState *state) {
-    // 创建窗口
-    state->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(state->window), "鼠标移动捕获器");
+// 查找鼠标设备
+char *find_mouse_device() {
+    DIR *dir;
+    struct dirent *entry;
+    static char device_path[256];
+    int fd;
+    char name[256];
     
-    // 设置窗口大小
-    gtk_window_set_default_size(GTK_WINDOW(state->window), 800, 600);
-    
-    // 创建绘图区域
-    state->drawing_area = gtk_drawing_area_new();
-    gtk_container_add(GTK_CONTAINER(state->window), state->drawing_area);
-    
-    // 设置事件掩码
-    gtk_widget_add_events(state->drawing_area, 
-                          GDK_POINTER_MOTION_MASK | 
-                          GDK_BUTTON_PRESS_MASK | 
-                          GDK_BUTTON_RELEASE_MASK);
-    
-    // 退出时关闭程序
-    g_signal_connect(state->window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
-    
-    // 显示所有窗口部件
-    gtk_widget_show_all(state->window);
-    
-    // 全屏显示
-    if (state->fullscreen) {
-        gtk_window_fullscreen(GTK_WINDOW(state->window));
+    // 打开/dev/input目录
+    dir = opendir("/dev/input");
+    if (!dir) {
+        perror("无法打开/dev/input目录");
+        return NULL;
     }
     
-    // 获取屏幕尺寸
-    GdkDisplay *display = gtk_widget_get_display(state->window);
-    if (display) {
-        GdkMonitor *monitor = gdk_display_get_primary_monitor(display);
-        if (monitor) {
-            GdkRectangle workarea;
-            gdk_monitor_get_workarea(monitor, &workarea);
-            state->screen_width = workarea.width;
-            state->screen_height = workarea.height;
-        } else {
-            // 如果无法获取主监视器，使用默认值
-            state->screen_width = 1920;
-            state->screen_height = 1080;
-            fprintf(stderr, "警告：无法获取主监视器，使用默认分辨率 1920x1080\n");
-        }
-    } else {
-        // 如果无法获取显示，使用默认值
-        state->screen_width = 1920;
-        state->screen_height = 1080;
-        fprintf(stderr, "警告：无法获取显示，使用默认分辨率 1920x1080\n");
-    }
-}
-
-// 鼠标移动回调函数
-static gboolean on_motion_notify(GtkWidget *widget G_GNUC_UNUSED, GdkEventMotion *event, gpointer data) {
-    AppState *state = (AppState *)data;
-    
-    if (state->connected) {
-        // 计算鼠标相对位置（0.0-1.0）
-        float rel_x = event->x / state->screen_width;
-        float rel_y = event->y / state->screen_height;
-        
-        // 发送鼠标移动消息
-        network_send_mouse_move(state->network, rel_x, rel_y, 0);
-    }
-    
-    return TRUE;
-}
-
-// 鼠标按钮回调函数
-static gboolean on_button_press(GtkWidget *widget G_GNUC_UNUSED, GdkEventButton *event, gpointer data) {
-    AppState *state = (AppState *)data;
-    
-    if (state->connected) {
-        // 计算鼠标相对位置（0.0-1.0）
-        float rel_x = event->x / state->screen_width;
-        float rel_y = event->y / state->screen_height;
-        
-        // 按钮状态（1=左键，2=中键，3=右键）
-        uint8_t buttons = 1 << (event->button - 1);
-        
-        // 发送鼠标移动消息
-        network_send_mouse_move(state->network, rel_x, rel_y, buttons);
-    }
-    
-    return TRUE;
-}
-
-// 鼠标按钮释放回调函数
-static gboolean on_button_release(GtkWidget *widget G_GNUC_UNUSED, GdkEventButton *event, gpointer data) {
-    AppState *state = (AppState *)data;
-    
-    if (state->connected) {
-        // 计算鼠标相对位置（0.0-1.0）
-        float rel_x = event->x / state->screen_width;
-        float rel_y = event->y / state->screen_height;
-        
-        // 发送鼠标移动消息，按钮参数设为0表示释放
-        network_send_mouse_move(state->network, rel_x, rel_y, 0);
-    }
-    
-    return TRUE;
-}
-
-// 连接到服务器
-static bool connect_to_server(AppState *state) {
-    if (!state->network) {
-        state->network = network_init();
-        if (!state->network) {
-            fprintf(stderr, "无法初始化网络\n");
-            return false;
+    // 遍历所有event设备
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "event", 5) == 0) {
+            snprintf(device_path, sizeof(device_path), "/dev/input/%s", entry->d_name);
+            
+            fd = open(device_path, O_RDONLY);
+            if (fd < 0) continue;
+            
+            // 获取设备名称
+            if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) >= 0) {
+                if (strstr(name, "Mouse") || strstr(name, "mouse")) {
+                    printf("找到鼠标设备: %s (%s)\n", device_path, name);
+                    close(fd);
+                    closedir(dir);
+                    return device_path;
+                }
+            }
+            close(fd);
         }
     }
     
-    // 连接到服务器
-    if (!network_connect(state->network, state->server_ip, state->port)) {
-        fprintf(stderr, "无法连接到服务器 %s:%d\n", state->server_ip, state->port);
-        return false;
-    }
-    
-    state->connected = true;
-    printf("已连接到服务器 %s:%d\n", state->server_ip, state->port);
-    
-    return true;
+    closedir(dir);
+    return NULL;
 }
 
-// 初始化应用程序
-static bool init_app(AppState *state, int argc, char **argv) {
-    // 初始化GTK
-    gtk_init(&argc, &argv);
+// 发送线程函数
+void *send_thread_func(void *arg) {
+    uint64_t last_message_counter = 0;
     
-    // 默认值
-    state->network = NULL;
-    state->connected = false;
-    state->fullscreen = true;  // 默认全屏
-    
-    // 解析命令行参数
-    if (argc < 2 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
-        show_usage(argv[0]);
-        return false;
+    while (running) {
+        // 准备消息
+        MouseMoveMessage msg;
+        msg.header.type = MSG_MOUSE_MOVE;
+        msg.header.size = sizeof(MouseMoveMessage);
+        msg.rel_x = last_rel_x;
+        msg.rel_y = last_rel_y;
+        msg.buttons = button_state;
+        msg.timestamp = message_counter;
+        
+        // 决定是否发送消息
+        // 1. 位置发生变化且超过阈值
+        // 2. 按钮状态发生变化
+        // 3. 强制发送标志为真
+        if (force_send || button_state != last_sent_button_state) {
+            // 发送消息
+            if (network_send_message(network, (Message*)&msg) == 0) {
+                printf("发送鼠标移动消息: x=%.2f, y=%.2f, 按钮=%u, ID=%llu\n", 
+                       msg.rel_x, msg.rel_y, msg.buttons, msg.timestamp);
+                
+                // 更新上次发送的按钮状态
+                last_sent_button_state = button_state;
+                last_message_counter = message_counter++;
+                force_send = false;
+            } else {
+                fprintf(stderr, "发送消息失败\n");
+            }
+        }
+        
+        // 休眠一段时间
+        usleep(10000); // 10毫秒
     }
     
-    state->server_ip = argv[1];
-    state->port = (argc > 2) ? atoi(argv[2]) : DEFAULT_PORT;
-    
-    // 创建主窗口
-    create_window(state);
-    
-    // 连接信号
-    g_signal_connect(state->drawing_area, "motion-notify-event", G_CALLBACK(on_motion_notify), state);
-    g_signal_connect(state->drawing_area, "button-press-event", G_CALLBACK(on_button_press), state);
-    g_signal_connect(state->drawing_area, "button-release-event", G_CALLBACK(on_button_release), state);
-    
-    // 连接到服务器
-    if (!connect_to_server(state)) {
-        // 连接失败，但继续运行程序
-        fprintf(stderr, "未能连接到服务器，将在GUI启动后重试\n");
-    }
-    
-    return true;
+    return NULL;
 }
 
-// 清理应用程序
-static void cleanup_app(AppState *state) {
-    if (state->network) {
-        network_cleanup(state->network);
-        state->network = NULL;
+// 处理鼠标事件
+void process_mouse_event(struct input_event *ev, double screen_width, double screen_height) {
+    static int dx = 0, dy = 0;
+    static bool moved = false;
+    
+    if (ev->type == EV_REL) {
+        // 鼠标相对移动
+        if (ev->code == REL_X) {
+            dx += ev->value;
+            moved = true;
+        } else if (ev->code == REL_Y) {
+            dy += ev->value;
+            moved = true;
+        }
+    } else if (ev->type == EV_KEY) {
+        // 按键事件
+        if (ev->code == BTN_LEFT) {
+            // 左键
+            if (ev->value) {
+                button_state |= 0x01; // 按下
+                printf("左键按下, 按钮状态: %d\n", button_state);
+            } else {
+                button_state &= ~0x01; // 释放
+                printf("左键释放, 按钮状态: %d\n", button_state);
+            }
+            force_send = true; // 强制发送按键事件
+        } else if (ev->code == BTN_MIDDLE) {
+            // 中键
+            if (ev->value) {
+                button_state |= 0x02; // 按下
+                printf("中键按下, 按钮状态: %d\n", button_state);
+            } else {
+                button_state &= ~0x02; // 释放
+                printf("中键释放, 按钮状态: %d\n", button_state);
+            }
+            force_send = true; // 强制发送按键事件
+        } else if (ev->code == BTN_RIGHT) {
+            // 右键
+            if (ev->value) {
+                button_state |= 0x04; // 按下
+                printf("右键按下, 按钮状态: %d\n", button_state);
+            } else {
+                button_state &= ~0x04; // 释放
+                printf("右键释放, 按钮状态: %d\n", button_state);
+            }
+            force_send = true; // 强制发送按键事件
+        }
+    } else if (ev->type == EV_SYN && moved) {
+        // 同步事件，处理累积的移动
+        double rel_x = (double)dx / 1000.0;
+        double rel_y = (double)dy / 1000.0;
+        
+        // 计算相对屏幕位置
+        last_rel_x += rel_x;
+        last_rel_y += rel_y;
+        
+        // 确保值在0.0-1.0范围内
+        if (last_rel_x < 0.0) last_rel_x = 0.0;
+        if (last_rel_x > 1.0) last_rel_x = 1.0;
+        if (last_rel_y < 0.0) last_rel_y = 0.0;
+        if (last_rel_y > 1.0) last_rel_y = 1.0;
+        
+        // 如果移动足够大，设置force_send为true
+        if (abs(rel_x) > move_threshold || abs(rel_y) > move_threshold) {
+            force_send = true;
+        }
+        
+        // 重置累积值
+        dx = 0;
+        dy = 0;
+        moved = false;
     }
 }
 
-// 主函数
 int main(int argc, char **argv) {
-    AppState state;
+    char *device_path;
+    int fd;
+    uint16_t port = DEFAULT_PORT;
+    char server_address[256] = DEFAULT_SERVER;
     
-    // 初始化应用程序
-    if (!init_app(&state, argc, argv)) {
+    // 处理命令行参数
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
+            port = atoi(argv[i + 1]);
+            i++;
+        } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
+            strncpy(server_address, argv[i + 1], sizeof(server_address) - 1);
+            i++;
+        } else if (strcmp(argv[i], "-r") == 0 && i + 2 < argc) {
+            screen_width = atoi(argv[i + 1]);
+            screen_height = atoi(argv[i + 2]);
+            i += 2;
+        }
+    }
+    
+    printf("服务器: %s, 端口: %d\n", server_address, port);
+    printf("目标屏幕分辨率: %d x %d\n", screen_width, screen_height);
+    
+    // 设置信号处理
+    signal(SIGINT, handle_signal);
+    signal(SIGTERM, handle_signal);
+    
+    // 查找鼠标设备
+    device_path = find_mouse_device();
+    if (!device_path) {
+        fprintf(stderr, "未找到鼠标设备\n");
         return 1;
     }
     
-    // 运行主循环
-    gtk_main();
+    // 打开鼠标设备
+    fd = open(device_path, O_RDONLY);
+    if (fd < 0) {
+        perror("无法打开鼠标设备");
+        return 1;
+    }
     
-    // 清理资源
-    cleanup_app(&state);
+    // 初始化网络
+    network = network_init();
+    if (!network) {
+        fprintf(stderr, "无法初始化网络\n");
+        close(fd);
+        return 1;
+    }
     
+    // 连接到服务器
+    if (!network_connect(network, server_address, port)) {
+        fprintf(stderr, "无法连接到服务器 %s:%d\n", server_address, port);
+        network_cleanup(network);
+        close(fd);
+        return 1;
+    }
+    
+    printf("已连接到服务器 %s:%d\n", server_address, port);
+    
+    // 创建发送线程
+    pthread_create(&send_thread, NULL, send_thread_func, NULL);
+    
+    // 主事件循环
+    while (running) {
+        struct input_event ev;
+        ssize_t n = read(fd, &ev, sizeof(ev));
+        
+        if (n == sizeof(ev)) {
+            process_mouse_event(&ev, screen_width, screen_height);
+        } else if (n < 0) {
+            perror("读取鼠标事件失败");
+            break;
+        }
+    }
+    
+    // 清理
+    pthread_join(send_thread, NULL);
+    network_cleanup(network);
+    close(fd);
+    
+    printf("程序已退出\n");
     return 0;
 } 
