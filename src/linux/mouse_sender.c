@@ -262,23 +262,26 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         // 根据滚动方向设置滚动量
         switch (event->direction) {
             case GDK_SCROLL_UP:
-                delta_y = -1.0; // 向上滚动
+                delta_y = -10.0; // 向上滚动，增大滚动量
                 break;
             case GDK_SCROLL_DOWN:
-                delta_y = 1.0;  // 向下滚动
+                delta_y = 10.0;  // 向下滚动，增大滚动量
                 break;
             case GDK_SCROLL_LEFT:
-                delta_x = -1.0; // 向左滚动
+                delta_x = -10.0; // 向左滚动，增大滚动量
                 break;
             case GDK_SCROLL_RIGHT:
-                delta_x = 1.0;  // 向右滚动
+                delta_x = 10.0;  // 向右滚动，增大滚动量
                 break;
             case GDK_SCROLL_SMOOTH:
                 // 使用精确的滚动量
                 gdk_event_get_scroll_deltas((GdkEvent*)event, &delta_x, &delta_y);
-                // 放大滚动量使其更明显
-                delta_x *= 10.0;
-                delta_y *= 10.0;
+                
+                // 直接使用原始滚动量，不再放大
+                // Mac端会处理缩放比例
+                // 保留小量放大以确保有足够的敏感度
+                delta_x *= 5.0;
+                delta_y *= 5.0;
                 break;
             default:
                 break;

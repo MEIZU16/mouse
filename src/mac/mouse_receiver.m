@@ -297,23 +297,30 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
 
 // 处理滚轮事件
 static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
-    // 转换滚动量到macOS期望的范围（约10倍减小使更符合macOS的滚动体验）
-    // 注意: macOS滚轮方向与Linux相反
-    CGScrollEventUnit unit = kCGScrollEventUnitPixel;  // 使用像素作为单位
-    double scaled_delta_x = -delta_x * 0.1;  // 反转并缩放X轴滚动量
-    double scaled_delta_y = -delta_y * 0.1;  // 反转并缩放Y轴滚动量
+    // 使用像素作为单位，而不是行
+    CGScrollEventUnit unit = kCGScrollEventUnitPixel;
     
-    printf("处理滚轮事件: 位置=(%.1f, %.1f), 滚动量=(%.2f, %.2f)\n", 
-           point.x, point.y, scaled_delta_x, scaled_delta_y);
+    // 根据实际测试调整滚动灵敏度
+    // 注意：在Mac系统中，正值表示向上/向左滚动，与Linux相反
+    // 将缩放系数增大，确保滚动量足够明显
+    double scaled_delta_x = -delta_x * 2.0;  // 反转并调整X轴滚动量
+    double scaled_delta_y = -delta_y * 2.0;  // 反转并调整Y轴滚动量
     
-    // 创建滚轮事件，传入两个轴的滚动量
+    printf("处理滚轮事件: 位置=(%.1f, %.1f), 原始滚动量=(%.2f, %.2f), 调整后=(%.2f, %.2f)\n", 
+           point.x, point.y, delta_x, delta_y, scaled_delta_x, scaled_delta_y);
+    
+    // 创建精确滚轮事件，使用64位浮点数来传递滚动值
     CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
         NULL,              // 默认源
         unit,              // 滚动单位
         2,                 // 滚动轴数量
-        (int32_t)scaled_delta_y,  // Y轴滚动量（主滚动轴）
-        (int32_t)scaled_delta_x   // X轴滚动量（水平滚动）
+        scaled_delta_y,    // Y轴滚动量（主滚动轴），不再强制转换为整数
+        scaled_delta_x     // X轴滚动量（水平滚动），不再强制转换为整数
     );
+    
+    // 设置滚轮事件为精确滚动
+    // 这个函数允许使用连续滚动值，而不是离散的整数值
+    CGEventSetIntegerValueField(scrollEvent, kCGScrollWheelEventIsContinuous, 1);
     
     // 将滚轮事件发送到系统
     CGEventPost(kCGHIDEventTap, scrollEvent);
