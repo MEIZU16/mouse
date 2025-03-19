@@ -30,35 +30,10 @@ typedef struct {
 // 全局状态用于定时器回调
 static AppState *g_app_state = NULL;
 
-// 长按检测定时器回调
+// 注释掉或简化长按检测定时器回调，保留函数以避免编译错误
 void long_press_timer_callback(NSTimer *timer) {
-    AppState *state = g_app_state; // 使用全局状态而不是从定时器获取
-    if (!state || !state->mousedown_sent || state->mouseup_sent || state->long_press_sent) {
-        return; // 不符合长按条件
-    }
-    
-    state->long_press_sent = true;
-    state->in_drag_mode = true;
-    printf("定时器触发长按，启用拖动模式\n");
-    
-    // 产生一个小的鼠标移动，触发拖动
-    CGPoint point = state->last_position;
-    point.x += 1; // 移动1像素，几乎察觉不到
-    
-    // 发送鼠标拖动事件
-    CGEventRef dragEvent = CGEventCreateMouseEvent(NULL, 
-        kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
-    CGEventSetIntegerValueField(dragEvent, kCGMouseEventClickState, 1);
-    CGEventPost(kCGHIDEventTap, dragEvent);
-    CFRelease(dragEvent);
-    
-    // 移回原位，这样用户察觉不到移动
-    point.x -= 1;
-    CGEventRef dragBackEvent = CGEventCreateMouseEvent(NULL, 
-        kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
-    CGEventSetIntegerValueField(dragBackEvent, kCGMouseEventClickState, 1);
-    CGEventPost(kCGHIDEventTap, dragBackEvent);
-    CFRelease(dragBackEvent);
+    // 不再使用长按检测逻辑
+    return;
 }
 
 // 处理鼠标按钮事件
@@ -90,30 +65,16 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             }
             
             // 左键按下
-            // 记录按下时间，用于检测长按
+            // 记录按下时间
             state->button_down_time = current_time;
             state->long_press_sent = false;
             state->mousedown_sent = true;
             state->mouseup_sent = false;
             state->click_processed = false;
-            state->in_drag_mode = false;
+            state->in_drag_mode = true; // 立即进入拖动模式
+            state->click_count = 1; // 始终为单击
             
-            // 计算与上次点击的时间间隔
-            NSTimeInterval click_interval = current_time - state->last_click_time;
-            printf("检测到按下事件，点击间隔: %.3f秒\n", click_interval);
-            
-            // 检查是否应该触发双击
-            if (!state->disable_double_click && 
-                click_interval < 0.3 && click_interval > 0.001 && // 排除0时间间隔
-                state->double_click_pending) {
-                
-                state->click_count = 2;
-                state->double_click_pending = false;
-                printf("触发双击事件 (间隔: %.3f秒)\n", click_interval);
-            } else {
-                state->click_count = 1;
-                printf("触发单击事件\n");
-            }
+            printf("按钮处理: 左键按下，进入拖动模式\n");
             
             // 创建鼠标按下事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
@@ -128,22 +89,11 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             // 记录最后点击时间
             state->last_click_time = current_time;
             
-            // 更新全局状态
-            g_app_state = state;
-            
-            // 启动长按检测定时器 (0.5秒后检测)
-            [state->long_press_timer invalidate];
-            state->long_press_timer = [NSTimer scheduledTimerWithTimeInterval:0.5 
-                                              target:[NSBlockOperation blockOperationWithBlock:^{
-                                                  long_press_timer_callback(nil);
-                                              }]
-                                            selector:@selector(main)
-                                            userInfo:nil
-                                             repeats:NO];
-            
-            // 确保定时器在当前运行循环的所有模式下都能运行
-            [[NSRunLoop currentRunLoop] addTimer:state->long_press_timer forMode:NSRunLoopCommonModes];
-            printf("已设置长按检测定时器\n");
+            // 不再使用长按定时器
+            if (state->long_press_timer) {
+                [state->long_press_timer invalidate];
+                state->long_press_timer = nil;
+            }
         } else {
             // 左键释放
             // 如果没有对应的按下事件，忽略此释放事件
@@ -153,15 +103,15 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             }
             
             // 停止长按检测定时器
-            [state->long_press_timer invalidate];
-            state->long_press_timer = nil;
+            if (state->long_press_timer) {
+                [state->long_press_timer invalidate];
+                state->long_press_timer = nil;
+            }
             
             state->mousedown_sent = false;
             state->mouseup_sent = true;
             
-            // 检查是否是长按后释放
-            bool was_long_press = state->long_press_sent;
-            bool was_in_drag_mode = state->in_drag_mode;
+            printf("按钮处理: 左键释放\n");
             
             // 创建鼠标释放事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
@@ -175,25 +125,14 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             
             // 重置拖动模式
             state->in_drag_mode = false;
-            
-            // 如果是长按释放，重置点击状态
-            if (was_long_press || was_in_drag_mode) {
-                state->double_click_pending = false;
-                printf("长按或拖动释放: 重置双击状态\n");
-            } else if (state->click_count == 1) {
-                // 如果是普通单击释放，设置双击挂起状态
-                state->double_click_pending = true;
-                printf("设置双击挂起状态\n");
-            }
-            
-            // 重置长按状态
             state->long_press_sent = false;
+            state->double_click_pending = false;
             state->click_processed = true;
         }
     } else if (current_buttons & 0x01) {
         // 左键保持按下
-        // 如果已经处于拖动模式，则发送拖动事件
-        if (state->in_drag_mode) {
+        // 无条件发送拖动事件
+        if (state->mousedown_sent && !state->mouseup_sent) {
             // 发送拖动事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
@@ -204,31 +143,6 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             // 更新最后位置（重要！）
             state->last_position = point;
             printf("发送拖动事件\n");
-        } else if (!state->long_press_sent && state->mousedown_sent && !state->mouseup_sent) {
-            // 检查是否应该触发长按事件
-            NSTimeInterval press_duration = current_time - state->button_down_time;
-            if (press_duration > 0.5) {
-                state->long_press_sent = true;
-                state->in_drag_mode = true;
-                printf("检测到长按: %.2f秒，启用拖动模式\n", press_duration);
-                
-                // 发送一个微小的拖动事件以触发系统的拖动操作
-                CGPoint slight_move = point;
-                slight_move.x += 1;
-                
-                CGEventRef drag_event = CGEventCreateMouseEvent(NULL, 
-                    kCGEventLeftMouseDragged, slight_move, kCGMouseButtonLeft);
-                CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
-                CGEventPost(kCGHIDEventTap, drag_event);
-                CFRelease(drag_event);
-                
-                // 立即移回原位置，对用户几乎不可见
-                CGEventRef back_event = CGEventCreateMouseEvent(NULL, 
-                    kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
-                CGEventSetIntegerValueField(back_event, kCGMouseEventClickState, 1);
-                CGEventPost(kCGHIDEventTap, back_event);
-                CFRelease(back_event);
-            }
         }
     }
     
@@ -294,54 +208,71 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     // 总是移动鼠标到新位置
     CGWarpMouseCursorPosition(point);
     
-    // 如果左键按下并处于拖动模式，只处理拖动
-    if ((current_buttons & 0x01) && state->in_drag_mode) {
+    // 如果左键按下，无条件处理为拖动模式
+    if (current_buttons & 0x01) {
+        // 如果尚未发送按下事件，先发送按下事件
+        if (!state->mousedown_sent) {
+            // 左键按下
+            // 记录按下时间
+            NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+            state->button_down_time = current_time;
+            state->long_press_sent = false;
+            state->mousedown_sent = true;
+            state->mouseup_sent = false;
+            state->click_processed = false;
+            state->in_drag_mode = true; // 立即进入拖动模式
+            
+            printf("鼠标按下，立即进入拖动模式\n");
+            
+            // 创建鼠标按下事件
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
+            
+            // 设置点击计数为1
+            CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
+            
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        }
+        
+        // 发送拖动事件
         CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
             kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
         CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
         CGEventPost(kCGHIDEventTap, drag_event);
         CFRelease(drag_event);
         
-        // 更新位置，不进行其他处理
+        // 更新位置
         state->last_position = point;
         state->last_move_time = [[NSDate date] timeIntervalSince1970];
-        
-        return; // 直接返回，不做其他处理
-    } 
-    else if ((current_buttons & 0x01) && state->mousedown_sent && !state->mouseup_sent && !state->long_press_sent) {
-        // 如果左键按下但尚未触发长按，检查是否现在应该触发
-        NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
-        NSTimeInterval press_duration = current_time - state->button_down_time;
-        
-        if (press_duration > 0.5) {
-            state->long_press_sent = true;
-            state->in_drag_mode = true;
-            printf("鼠标移动时检测到长按: %.2f秒，启用拖动模式\n", press_duration);
-            
-            // 停止长按检测定时器
-            [state->long_press_timer invalidate];
-            state->long_press_timer = nil;
-            
-            // 发送拖动事件
-            CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
-                kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
-            CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
-            CGEventPost(kCGHIDEventTap, drag_event);
-            CFRelease(drag_event);
-            
-            // 更新位置并返回
-            state->last_position = point;
-            state->last_move_time = current_time;
-            return;
-        }
     } 
     else if (current_buttons == 0) {
+        // 如果之前鼠标按下且现在释放，处理释放事件
+        if (state->mousedown_sent && !state->mouseup_sent) {
+            // 释放鼠标
+            state->mousedown_sent = false;
+            state->mouseup_sent = true;
+            state->in_drag_mode = false;
+            
+            printf("鼠标释放\n");
+            
+            // 创建鼠标释放事件
+            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+            
+            // 设置点击计数
+            CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
+            
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        }
+        
         // 如果没有按钮按下，发送移动事件
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     } 
-    else if (!(current_buttons & 0x01 && state->in_drag_mode)) {
+    else {
         // 其他情况，如右键按下或中键按下
         handle_mouse_buttons(state, point, current_buttons, state->last_buttons, message_id);
     }
@@ -369,44 +300,20 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             return;
         }
         
-        // 检查按钮状态变化
+        // 检查按钮状态
         bool button_changed = mouse_msg->buttons != state->last_buttons;
         
-        // 不在这里更新状态，而是在处理完后更新
-        uint8_t old_buttons = state->last_buttons;
-        
-        // 如果按钮状态没有改变，但鼠标位置变化了，处理移动
-        if (!button_changed) {
-            // 鼠标位置变化，处理移动
-            handle_mouse_move(state, point, mouse_msg->buttons, mouse_msg->timestamp);
-        } 
-        // 按钮状态有变化，需要特殊处理
+        // 如果按钮状态变化，处理按钮事件
+        if (button_changed) {
+            printf("按钮状态变化：从 %d 变为 %d\n", state->last_buttons, mouse_msg->buttons);
+            // 更新状态后处理
+            uint8_t old_buttons = state->last_buttons;
+            state->last_buttons = mouse_msg->buttons;
+            handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
+        }
+        // 否则处理鼠标移动
         else {
-            // 按钮状态确实改变了
-            if ((old_buttons & 0x01) && !(mouse_msg->buttons & 0x01)) {
-                // 从按下变为未按下 - 真正的释放事件
-                printf("按钮真正释放：从 %d 变为 %d\n", old_buttons, mouse_msg->buttons);
-                
-                // 更新状态后再处理
-                state->last_buttons = mouse_msg->buttons;
-                handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
-            } 
-            else if (!(old_buttons & 0x01) && (mouse_msg->buttons & 0x01)) {
-                // 从未按下变为按下 - 真正的按下事件
-                printf("按钮真正按下：从 %d 变为 %d\n", old_buttons, mouse_msg->buttons);
-                
-                // 更新状态后再处理
-                state->last_buttons = mouse_msg->buttons;
-                handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
-            }
-            else {
-                // 其他按钮状态变化，如右键或中键
-                printf("其他按钮状态变化：从 %d 变为 %d\n", old_buttons, mouse_msg->buttons);
-                
-                // 更新状态后再处理
-                state->last_buttons = mouse_msg->buttons;
-                handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
-            }
+            handle_mouse_move(state, point, mouse_msg->buttons, mouse_msg->timestamp);
         }
     }
 }
@@ -426,7 +333,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->long_press_sent = false;
     state->last_message_id = 0;
     state->last_click_message_id = 0;
-    state->disable_double_click = false; // 启用双击功能
+    state->disable_double_click = true; // 禁用双击功能
     state->mousedown_sent = false;
     state->mouseup_sent = false;
     state->click_processed = false;
@@ -459,7 +366,8 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->running = true;
     printf("开始监听端口 %d\n", state->port);
     printf("屏幕分辨率: %d x %d\n", state->screen_width, state->screen_height);
-    printf("双击功能和强化长按功能已启用（主动拖动模式）\n");
+    printf("双击功能已禁用，即时拖动功能已启用\n");
+    printf("已优化为按下即可拖动模式，无需等待长按\n");
     
     return true;
 }
