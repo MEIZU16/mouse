@@ -303,12 +303,12 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
 }
 
-// 处理滚轮事件 - 使用键盘模拟
+// 处理滚轮事件 - 使用按键代替
 static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
-    // 先确保鼠标在正确位置
+    // 先确保鼠标位置正确
     CGWarpMouseCursorPosition(point);
     
-    // 确定滚动方向(简化为上下左右四个方向)
+    // 确定滚动方向
     bool scroll_up = delta_y < 0;
     bool scroll_down = delta_y > 0;
     bool scroll_left = delta_x < 0;
@@ -321,51 +321,50 @@ static void handle_scroll(AppState *state, CGPoint point, float delta_x, float d
            scroll_left ? "左 " : "",
            scroll_right ? "右 " : "");
     
-    @autoreleasepool {
-        // 使用AppleScript模拟键盘事件来代替滚轮事件
-        // 在macOS上，Page Up/Down/左右箭头通常能实现类似滚轮的功能
-        NSString *scriptText = nil;
+    // 定义键代码
+    CGKeyCode keycode = 0;
+    if (scroll_up) {
+        keycode = 126; // Up arrow key
+    } else if (scroll_down) {
+        keycode = 125; // Down arrow key
+    } else if (scroll_left) {
+        keycode = 123; // Left arrow key
+    } else if (scroll_right) {
+        keycode = 124; // Right arrow key
+    } else {
+        // 没有方向，不做任何事
+        return;
+    }
+    
+    // 直接使用CGEvent发送按键，而不是AppleScript
+    CGEventRef keyDown = CGEventCreateKeyboardEvent(NULL, keycode, true);
+    CGEventRef keyUp = CGEventCreateKeyboardEvent(NULL, keycode, false);
+    
+    if (keyDown && keyUp) {
+        // 发送按键事件
+        CGEventPost(kCGHIDEventTap, keyDown);
+        usleep(10000); // 10ms延迟
+        CGEventPost(kCGHIDEventTap, keyUp);
         
-        if (scroll_up) {
-            // 使用Page Up键模拟向上滚动
-            scriptText = @"tell application \"System Events\"\n"
-                         @"  key code 116\n" // Page Up键
-                         @"end tell";
-        } else if (scroll_down) {
-            // 使用Page Down键模拟向下滚动
-            scriptText = @"tell application \"System Events\"\n"
-                         @"  key code 121\n" // Page Down键
-                         @"end tell";
-        } else if (scroll_left) {
-            // 使用左箭头键模拟向左滚动
-            scriptText = @"tell application \"System Events\"\n"
-                         @"  key code 123\n" // 左箭头键
-                         @"end tell";
-        } else if (scroll_right) {
-            // 使用右箭头键模拟向右滚动
-            scriptText = @"tell application \"System Events\"\n"
-                         @"  key code 124\n" // 右箭头键
-                         @"end tell";
-        }
+        printf("已发送键盘按键模拟滚轮: keycode=%d\n", keycode);
         
-        // 执行AppleScript
-        if (scriptText) {
-            NSAppleScript *script = [[NSAppleScript alloc] initWithSource:scriptText];
-            NSDictionary *error = nil;
-            [script executeAndReturnError:&error];
-            
-            if (error) {
-                NSLog(@"AppleScript执行错误: %@", error);
-            } else {
-                printf("已发送键盘事件模拟滚轮\n");
-            }
-        }
+        // 释放事件
+        CFRelease(keyDown);
+        CFRelease(keyUp);
         
-        // 确保鼠标位置不变
-        usleep(5000); // 短暂等待
+        // 确保鼠标位置保持在原位置
+        usleep(10000); // 等待10ms
         CGWarpMouseCursorPosition(point);
         
-        // 发送普通的鼠标移动事件以保持控制
+        // 发送鼠标移动事件以确保控制权不会丢失
+        CGEventRef moveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+        if (moveEvent) {
+            CGEventPost(kCGHIDEventTap, moveEvent);
+            CFRelease(moveEvent);
+        }
+    } else {
+        printf("创建键盘事件失败\n");
+        // 如果键事件创建失败，至少发送一个鼠标移动事件保持控制
         CGEventRef moveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
         if (moveEvent) {
             CGEventPost(kCGHIDEventTap, moveEvent);
@@ -550,27 +549,44 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             
             CGPoint point = CGPointMake(abs_x, abs_y);
             
-            // 2. 防止重复处理
+            // 2. 先发送一个鼠标移动事件，确保我们能控制鼠标位置
+            CGWarpMouseCursorPosition(point);
+            CGEventRef preMoveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+            if (preMoveEvent) {
+                CGEventPost(kCGHIDEventTap, preMoveEvent);
+                CFRelease(preMoveEvent);
+            }
+            
+            // 3. 防止重复处理
             if (scroll_msg->timestamp == state->last_message_id) {
                 printf("忽略重复的滚轮消息 ID: %llu\n", scroll_msg->timestamp);
                 return;
             }
             
-            // 3. 记录消息ID
+            // 4. 记录消息ID
             state->last_message_id = scroll_msg->timestamp;
             
-            // 4. 检查滚动值
+            // 5. 检查滚动值
             if (scroll_msg->delta_x == 0.0 && scroll_msg->delta_y == 0.0) {
                 printf("忽略无效的滚轮消息: 滚动量为零\n");
                 return;
             }
             
-            // 5. 输出调试信息
+            // 6. 输出调试信息
             printf("收到滚轮消息: 位置=(%.1f, %.1f), 滚动量=(%.1f, %.1f)\n", 
                    abs_x, abs_y, scroll_msg->delta_x, scroll_msg->delta_y);
             
-            // 6. 处理滚轮事件
+            // 7. 处理滚轮事件
             handle_scroll(state, point, scroll_msg->delta_x, scroll_msg->delta_y);
+            
+            // 8. 在滚轮事件后确保鼠标位置正确和控制不丢失
+            usleep(20000); // 等待20ms
+            CGWarpMouseCursorPosition(point);
+            CGEventRef postMoveEvent = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, 0);
+            if (postMoveEvent) {
+                CGEventPost(kCGHIDEventTap, postMoveEvent);
+                CFRelease(postMoveEvent);
+            }
             
             break;
         }
@@ -699,17 +715,35 @@ int main(int argc, const char **argv) {
             return 1;
         }
         
-        // 请求控制鼠标的权限
-        if (!AXIsProcessTrustedWithOptions(NULL)) {
+        // 检查权限并确保我们有控制权
+        bool hasPermission = AXIsProcessTrustedWithOptions(NULL);
+        if (!hasPermission) {
             NSAlert *alert = [[NSAlert alloc] init];
             [alert setMessageText:@"需要辅助功能权限"];
-            [alert setInformativeText:@"请在系统设置中允许此应用程序控制您的电脑"];
-            [alert addButtonWithTitle:@"确定"];
-            [alert runModal];
+            [alert setInformativeText:@"请在系统设置中允许此应用程序控制您的电脑，然后重新启动应用程序。\n\n未获得权限将导致滚轮功能异常。"];
+            [alert addButtonWithTitle:@"打开系统设置"];
+            [alert addButtonWithTitle:@"继续使用（功能受限）"];
             
-            // 打开系统偏好设置中的隐私设置
-            NSString *urlString = @"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-            [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:urlString]];
+            NSModalResponse response = [alert runModal];
+            
+            if (response == NSAlertFirstButtonReturn) {
+                // 打开系统偏好设置中的隐私设置
+                NSString *urlString = @"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+                [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:urlString]];
+                
+                // 等待用户完成权限设置
+                printf("请在系统设置中授予权限后，按下回车键继续...\n");
+                getchar();
+                
+                // 再次检查权限
+                if (!AXIsProcessTrustedWithOptions(NULL)) {
+                    printf("警告：仍未获得完全权限，滚轮功能可能不正常工作\n");
+                } else {
+                    printf("已获得辅助功能权限，所有功能将正常工作\n");
+                }
+            }
+        } else {
+            printf("已获得辅助功能权限，所有功能将正常工作\n");
         }
         
         // 运行应用程序
