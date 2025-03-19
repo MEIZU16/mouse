@@ -24,34 +24,38 @@ typedef struct {
     bool mouseup_sent;            // 是否已发送释放事件
     bool click_processed;         // 当前点击是否已处理
     bool in_drag_mode;            // 是否处于拖动模式
-    CFRunLoopTimerRef long_press_timer;    // 长按检测定时器
+    NSTimer *long_press_timer;    // 长按检测定时器
 } AppState;
 
 // 长按检测定时器回调
-void long_press_timer_callback(CFRunLoopTimerRef timer, void *info) {
-    AppState *state = (AppState *)info;
+void long_press_timer_fired(NSTimer *timer) {
+    AppState *state = (AppState *)timer.userInfo;
     if (!state->mousedown_sent || state->mouseup_sent || state->long_press_sent) {
         return; // 不符合长按条件
     }
     
-    NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
-    NSTimeInterval press_duration = current_time - state->button_down_time;
+    state->long_press_sent = true;
+    state->in_drag_mode = true;
+    printf("定时器触发长按，启用拖动模式\n");
     
-    if (press_duration > 0.5) {
-        // 超过500毫秒视为长按
-        state->long_press_sent = true;
-        state->in_drag_mode = true;
-        state->double_click_pending = false; // 长按取消双击挂起状态
-        
-        printf("定时器检测到长按: %.2f秒，启用拖动模式\n", press_duration);
-        
-        // 发送拖动事件
-        CGEventRef event = CGEventCreateMouseEvent(NULL, 
-            kCGEventLeftMouseDragged, state->last_position, kCGMouseButtonLeft);
-        CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
-    }
+    // 产生一个小的鼠标移动，触发拖动
+    CGPoint point = state->last_position;
+    point.x += 1; // 移动1像素，几乎察觉不到
+    
+    // 发送鼠标拖动事件
+    CGEventRef dragEvent = CGEventCreateMouseEvent(NULL, 
+        kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+    CGEventSetIntegerValueField(dragEvent, kCGMouseEventClickState, 1);
+    CGEventPost(kCGHIDEventTap, dragEvent);
+    CFRelease(dragEvent);
+    
+    // 移回原位，这样用户察觉不到移动
+    point.x -= 1;
+    CGEventRef dragBackEvent = CGEventCreateMouseEvent(NULL, 
+        kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+    CGEventSetIntegerValueField(dragBackEvent, kCGMouseEventClickState, 1);
+    CGEventPost(kCGHIDEventTap, dragBackEvent);
+    CFRelease(dragBackEvent);
 }
 
 // 处理鼠标按钮事件
@@ -121,28 +125,19 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             // 记录最后点击时间
             state->last_click_time = current_time;
             
-            // 创建长按检测定时器
-            if (state->long_press_timer) {
-                CFRunLoopTimerInvalidate(state->long_press_timer);
-                CFRelease(state->long_press_timer);
-                state->long_press_timer = NULL;
-            }
+            // 启动长按检测定时器 (0.5秒后检测)
+            [state->long_press_timer invalidate];
+            state->long_press_timer = [NSTimer scheduledTimerWithTimeInterval:0.5 
+                                                                       target:[NSBlockOperation blockOperationWithBlock:^{
+                                                                           long_press_timer_fired(state->long_press_timer);
+                                                                       }]
+                                                                     selector:@selector(main)
+                                                                     userInfo:state
+                                                                      repeats:NO];
             
-            CFRunLoopTimerContext context = {0, state, NULL, NULL, NULL};
-            state->long_press_timer = CFRunLoopTimerCreate(
-                kCFAllocatorDefault,
-                CFAbsoluteTimeGetCurrent() + 0.5, // 0.5秒后触发
-                0, // 不重复
-                0,
-                0,
-                long_press_timer_callback,
-                &context
-            );
-            
-            if (state->long_press_timer) {
-                CFRunLoopAddTimer(CFRunLoopGetCurrent(), state->long_press_timer, kCFRunLoopCommonModes);
-                printf("已设置长按检测定时器\n");
-            }
+            // 确保定时器在当前运行循环的所有模式下都能运行
+            [[NSRunLoop currentRunLoop] addTimer:state->long_press_timer forMode:NSRunLoopCommonModes];
+            printf("已设置长按检测定时器\n");
         } else {
             // 左键释放
             // 如果没有对应的按下事件，忽略此释放事件
@@ -151,12 +146,9 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
                 return;
             }
             
-            // 取消长按定时器
-            if (state->long_press_timer) {
-                CFRunLoopTimerInvalidate(state->long_press_timer);
-                CFRelease(state->long_press_timer);
-                state->long_press_timer = NULL;
-            }
+            // 停止长按检测定时器
+            [state->long_press_timer invalidate];
+            state->long_press_timer = nil;
             
             state->mousedown_sent = false;
             state->mouseup_sent = true;
@@ -194,31 +186,43 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
         }
     } else if (current_buttons & 0x01) {
         // 左键保持按下
-        // 检查是否应该触发长按事件
-        NSTimeInterval press_duration = current_time - state->button_down_time;
-        
-        if (press_duration > 0.5 && !state->long_press_sent && state->mousedown_sent && !state->mouseup_sent) {
-            // 超过500毫秒视为长按
-            state->long_press_sent = true;
-            state->in_drag_mode = true;
-            state->double_click_pending = false; // 长按取消双击挂起状态
-            
-            printf("检测到长按: %.2f秒，启用拖动模式\n", press_duration);
-        }
-        
-        // 如果处于拖动模式或长按状态，发送拖动事件
-        if (state->long_press_sent || state->in_drag_mode) {
+        // 如果已经处于拖动模式，则发送拖动事件
+        if (state->in_drag_mode) {
             // 发送拖动事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
-            
-            // 设置点击计数
-            CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
-            
+            CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
             CGEventPost(kCGHIDEventTap, event);
             CFRelease(event);
             
+            // 更新最后位置（重要！）
+            state->last_position = point;
             printf("发送拖动事件\n");
+        } else if (!state->long_press_sent && state->mousedown_sent && !state->mouseup_sent) {
+            // 检查是否应该触发长按事件
+            NSTimeInterval press_duration = current_time - state->button_down_time;
+            if (press_duration > 0.5) {
+                state->long_press_sent = true;
+                state->in_drag_mode = true;
+                printf("检测到长按: %.2f秒，启用拖动模式\n", press_duration);
+                
+                // 发送一个微小的拖动事件以触发系统的拖动操作
+                CGPoint slight_move = point;
+                slight_move.x += 1;
+                
+                CGEventRef drag_event = CGEventCreateMouseEvent(NULL, 
+                    kCGEventLeftMouseDragged, slight_move, kCGMouseButtonLeft);
+                CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
+                CGEventPost(kCGHIDEventTap, drag_event);
+                CFRelease(drag_event);
+                
+                // 立即移回原位置，对用户几乎不可见
+                CGEventRef back_event = CGEventCreateMouseEvent(NULL, 
+                    kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+                CGEventSetIntegerValueField(back_event, kCGMouseEventClickState, 1);
+                CGEventPost(kCGHIDEventTap, back_event);
+                CFRelease(back_event);
+            }
         }
     }
     
@@ -284,33 +288,34 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     // 总是移动鼠标到新位置
     CGWarpMouseCursorPosition(point);
     
-    // 如果按钮已按下，检查是否为长按
-    if (current_buttons & 0x01 && state->mousedown_sent && !state->mouseup_sent) {
+    // 如果按钮已按下并处于拖动模式，立即发送拖动事件
+    if ((current_buttons & 0x01) && state->in_drag_mode) {
+        CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
+            kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+        CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
+        CGEventPost(kCGHIDEventTap, drag_event);
+        CFRelease(drag_event);
+        printf("持续拖动中...\n");
+    } else if ((current_buttons & 0x01) && state->mousedown_sent && !state->mouseup_sent && !state->long_press_sent) {
+        // 如果按钮已按下但尚未触发长按，检查是否现在应该触发
         NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
         NSTimeInterval press_duration = current_time - state->button_down_time;
         
-        // 如果按下时间超过500毫秒且未触发长按，则触发长按
-        if (press_duration > 0.5 && !state->long_press_sent) {
+        if (press_duration > 0.5) {
             state->long_press_sent = true;
             state->in_drag_mode = true;
             printf("鼠标移动时检测到长按: %.2f秒，启用拖动模式\n", press_duration);
             
-            // 取消长按定时器
-            if (state->long_press_timer) {
-                CFRunLoopTimerInvalidate(state->long_press_timer);
-                CFRelease(state->long_press_timer);
-                state->long_press_timer = NULL;
-            }
-        }
-        
-        // 如果已处于拖动模式，则继续发送拖动事件
-        if (state->in_drag_mode) {
+            // 停止长按检测定时器
+            [state->long_press_timer invalidate];
+            state->long_press_timer = nil;
+            
+            // 发送拖动事件
             CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
                 kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
             CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, 1);
             CGEventPost(kCGHIDEventTap, drag_event);
             CFRelease(drag_event);
-            printf("持续拖动中...\n");
         }
     }
     
@@ -320,7 +325,7 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
     } else {
-        // 如果有按钮按下，处理按钮状态（包括拖动）
+        // 如果有按钮按下，处理按钮状态
         handle_mouse_buttons(state, point, current_buttons, state->last_buttons, message_id);
     }
     
@@ -349,26 +354,6 @@ void message_callback(const Message* msg, size_t msg_size, void* user_data) {
         
         // 检查按钮状态变化
         bool button_changed = mouse_msg->buttons != state->last_buttons;
-        
-        // 长按检测（即使按钮没有变化也要检查）
-        if ((mouse_msg->buttons & 0x01) && state->mousedown_sent && !state->mouseup_sent) {
-            NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
-            NSTimeInterval press_duration = current_time - state->button_down_time;
-            
-            // 每次消息来时都检查一下长按状态
-            if (press_duration > 0.5 && !state->long_press_sent) {
-                state->long_press_sent = true;
-                state->in_drag_mode = true;
-                printf("消息处理时检测到长按: %.2f秒，启用拖动模式\n", press_duration);
-                
-                // 取消长按定时器
-                if (state->long_press_timer) {
-                    CFRunLoopTimerInvalidate(state->long_press_timer);
-                    CFRelease(state->long_press_timer);
-                    state->long_press_timer = NULL;
-                }
-            }
-        }
         
         // 处理鼠标移动
         if (!button_changed) {
@@ -401,7 +386,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->mouseup_sent = false;
     state->click_processed = false;
     state->in_drag_mode = false;
-    state->long_press_timer = NULL;
+    state->long_press_timer = nil;
     
     // 获取屏幕尺寸
     NSScreen *mainScreen = [NSScreen mainScreen];
@@ -429,7 +414,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->running = true;
     printf("开始监听端口 %d\n", state->port);
     printf("屏幕分辨率: %d x %d\n", state->screen_width, state->screen_height);
-    printf("双击功能和长按功能已启用（定时器版）\n");
+    printf("双击功能和强化长按功能已启用（主动拖动模式）\n");
     
     return true;
 }
@@ -441,11 +426,8 @@ void cleanup_app(AppState *state) {
         state->network = NULL;
     }
     
-    if (state->long_press_timer) {
-        CFRunLoopTimerInvalidate(state->long_press_timer);
-        CFRelease(state->long_press_timer);
-        state->long_press_timer = NULL;
-    }
+    [state->long_press_timer invalidate];
+    state->long_press_timer = nil;
     
     state->running = false;
 }
