@@ -27,10 +27,13 @@ typedef struct {
     NSTimer *long_press_timer;    // 长按检测定时器
 } AppState;
 
+// 全局状态用于定时器回调
+static AppState *g_app_state = NULL;
+
 // 长按检测定时器回调
-void long_press_timer_fired(NSTimer *timer) {
-    AppState *state = (__bridge AppState *)timer.userInfo;
-    if (!state->mousedown_sent || state->mouseup_sent || state->long_press_sent) {
+void long_press_timer_callback(NSTimer *timer) {
+    AppState *state = g_app_state; // 使用全局状态而不是从定时器获取
+    if (!state || !state->mousedown_sent || state->mouseup_sent || state->long_press_sent) {
         return; // 不符合长按条件
     }
     
@@ -125,15 +128,18 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             // 记录最后点击时间
             state->last_click_time = current_time;
             
+            // 更新全局状态
+            g_app_state = state;
+            
             // 启动长按检测定时器 (0.5秒后检测)
             [state->long_press_timer invalidate];
             state->long_press_timer = [NSTimer scheduledTimerWithTimeInterval:0.5 
-                                                                       target:[NSBlockOperation blockOperationWithBlock:^{
-                                                                           long_press_timer_fired(state->long_press_timer);
-                                                                       }]
-                                                                     selector:@selector(main)
-                                                                     userInfo:(__bridge id)state
-                                                                      repeats:NO];
+                                              target:[NSBlockOperation blockOperationWithBlock:^{
+                                                  long_press_timer_callback(nil);
+                                              }]
+                                            selector:@selector(main)
+                                            userInfo:nil
+                                             repeats:NO];
             
             // 确保定时器在当前运行循环的所有模式下都能运行
             [[NSRunLoop currentRunLoop] addTimer:state->long_press_timer forMode:NSRunLoopCommonModes];
