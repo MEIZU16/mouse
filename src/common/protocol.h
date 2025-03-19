@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+// 确保所有结构体内存对齐一致，避免不同编译器的差异
+#pragma pack(push, 1)
+
 // 默认端口号
 #define DEFAULT_PORT 8765
 
@@ -61,5 +64,7 @@ typedef union {
     DisconnectMessage disconnect;
     HeartbeatMessage heartbeat;
 } Message;
+
+#pragma pack(pop)
 
 #endif // MOUSE_PROTOCOL_H 
