@@ -257,6 +257,23 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
         float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
         
+        // 静态变量存储上次滚动时间
+        static uint64_t last_scroll_time = 0;
+        uint64_t current_time;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        current_time = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+        
+        // 限制发送频率，至少间隔200毫秒，避免过多事件导致卡死
+        if (current_time - last_scroll_time < 200) {
+            printf("[DEBUG] 忽略快速滚轮事件 (间隔=%lu ms)\n", 
+                  (unsigned long)(current_time - last_scroll_time));
+            return TRUE;
+        }
+        
+        // 更新上次滚动时间
+        last_scroll_time = current_time;
+        
         // 初始化滚动量，使用固定值
         float delta_x = 0.0;
         float delta_y = 0.0;
@@ -265,19 +282,19 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         switch (event->direction) {
             case GDK_SCROLL_UP:
                 delta_y = -1.0; // 向上滚动，固定为-1
-                printf("[DEBUG] 检测到向上滚动，但滚轮功能已禁用\n");
+                printf("[DEBUG] 向上滚动\n");
                 break;
             case GDK_SCROLL_DOWN:
                 delta_y = 1.0;  // 向下滚动，固定为1
-                printf("[DEBUG] 检测到向下滚动，但滚轮功能已禁用\n");
+                printf("[DEBUG] 向下滚动\n");
                 break;
             case GDK_SCROLL_LEFT:
                 delta_x = -1.0; // 向左滚动，固定为-1
-                printf("[DEBUG] 检测到向左滚动，但滚轮功能已禁用\n");
+                printf("[DEBUG] 向左滚动\n");
                 break;
             case GDK_SCROLL_RIGHT:
                 delta_x = 1.0;  // 向右滚动，固定为1
-                printf("[DEBUG] 检测到向右滚动，但滚轮功能已禁用\n");
+                printf("[DEBUG] 向右滚动\n");
                 break;
             case GDK_SCROLL_SMOOTH:
                 // 处理精确滚动，但只考虑方向
@@ -291,7 +308,7 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
                 if (dx > 0) delta_x = 1.0;
                 else if (dx < 0) delta_x = -1.0;
                 
-                printf("[DEBUG] 检测到平滑滚动: 方向X=%s, Y=%s，但滚轮功能已禁用\n", 
+                printf("[DEBUG] 平滑滚动: 方向X=%s, Y=%s\n", 
                       delta_x > 0 ? "右" : (delta_x < 0 ? "左" : "无"),
                       delta_y > 0 ? "下" : (delta_y < 0 ? "上" : "无"));
                 break;
@@ -299,26 +316,18 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
                 break;
         }
         
-        // 完全禁用滚轮事件发送，仅记录日志
-        printf("[INFO] 滚轮事件被禁用，防止进程卡死\n");
-        
-        // 不再发送滚轮事件
-        /*
         // 只有有实际滚动时才发送
         if (delta_x != 0.0 || delta_y != 0.0) {
-            printf("[DEBUG] 发送简单滚轮事件: X=%s, Y=%s\n", 
+            printf("[DEBUG] 发送滚轮事件: X=%s, Y=%s\n", 
                   delta_x > 0 ? "右" : (delta_x < 0 ? "左" : "无"),
                   delta_y > 0 ? "下" : (delta_y < 0 ? "上" : "无"));
             
             // 发送滚轮事件
             if (!network_send_scroll(state->network, rel_x, rel_y, delta_x, delta_y)) {
                 printf("[ERROR] 发送滚轮事件失败\n");
+                return TRUE; // 发送失败时立即返回
             }
-            
-            // 发送后等待较长时间，确保不会过快发送
-            usleep(100000); // 100毫秒
         }
-        */
     }
     
     return TRUE;

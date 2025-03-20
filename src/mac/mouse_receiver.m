@@ -640,9 +640,59 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
         }
         
         // 忽略滚轮事件
-        case MSG_SCROLL:
-            printf("[INFO] 收到滚轮消息，但滚轮功能已完全移除\n");
+        case MSG_SCROLL: {
+            const ScrollMessage *scroll_msg = (const ScrollMessage *)msg;
+            
+            // 计算绝对坐标
+            CGFloat abs_x = scroll_msg->rel_x * state->screen_width;
+            CGFloat abs_y = scroll_msg->rel_y * state->screen_height;
+            
+            // 修正坐标，确保在屏幕范围内
+            abs_x = fmax(0, fmin(abs_x, state->screen_width - 1));
+            abs_y = fmax(0, fmin(abs_y, state->screen_height - 1));
+            
+            CGPoint point = CGPointMake(abs_x, abs_y);
+            
+            // 移动鼠标到滚动发生的位置
+            CGWarpMouseCursorPosition(point);
+            
+            // 检查是否为重复消息
+            static uint64_t last_scroll_timestamp = 0;
+            if (scroll_msg->timestamp == last_scroll_timestamp) {
+                printf("[INFO] 忽略重复的滚轮消息 (时间戳: %llu)\n", 
+                      (unsigned long long)scroll_msg->timestamp);
+                break;
+            }
+            
+            // 更新滚轮时间戳
+            last_scroll_timestamp = scroll_msg->timestamp;
+            
+            // 输出滚轮信息
+            printf("[INFO] 收到滚轮消息: 位置=(%0.1f, %0.1f), 方向X=%s, Y=%s\n", 
+                  point.x, point.y,
+                  scroll_msg->delta_x > 0 ? "右" : (scroll_msg->delta_x < 0 ? "左" : "无"),
+                  scroll_msg->delta_y > 0 ? "下" : (scroll_msg->delta_y < 0 ? "上" : "无"));
+            
+            // 创建并发送滚轮事件
+            CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
+                NULL,
+                kCGScrollEventUnitLine, // 使用行为单位
+                2,                      // 两个方向 (X和Y)
+                (int32_t)scroll_msg->delta_y, // Y方向滚动量
+                (int32_t)scroll_msg->delta_x  // X方向滚动量
+            );
+            
+            if (scrollEvent) {
+                // 发送滚轮事件
+                CGEventPost(kCGHIDEventTap, scrollEvent);
+                CFRelease(scrollEvent);
+                printf("[INFO] 滚轮事件已发送\n");
+            } else {
+                printf("[ERROR] 无法创建滚轮事件\n");
+            }
+            
             break;
+        }
         
         // 可以添加其他消息类型的处理
         default:
@@ -719,7 +769,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     printf("双击功能已启用，即时拖动功能已启用\n");
     printf("已优化为按下即可拖动模式，支持双击检测\n");
     printf("已优化坐标映射，确保Linux和Mac屏幕位置一致\n");
-    printf("滚轮功能已完全移除\n");
+    printf("滚轮功能已启用\n");
     
     // 输出功能状态
     printf("初始设置：双击功能已%s\n", 
