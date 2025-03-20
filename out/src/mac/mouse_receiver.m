@@ -226,6 +226,9 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
                 CGEventPost(kCGHIDEventTap, event);
                 CFRelease(event);
                 printf("右键按下事件已发送\n");
+                
+                // 不要立即发送释放事件，让系统有时间处理按下事件
+                return; // 直接返回，不再执行下面的右键释放代码
             } else {
                 printf("错误：无法创建右键按下事件\n");
             }
@@ -528,6 +531,9 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                         CGEventPost(kCGHIDEventTap, event);
                         CFRelease(event);
                         printf("右键按下事件已发送（直接识别值4）\n");
+                        
+                        // 不要立即处理释放事件，等待下一个消息
+                        return; // 直接返回，不执行后续代码
                     } else {
                         printf("错误：无法创建右键按下事件\n");
                     }
@@ -565,6 +571,9 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                             CGEventPost(kCGHIDEventTap, event);
                             CFRelease(event);
                             printf("右键按下事件已直接发送\n");
+                            
+                            // 不要立即处理释放事件，等待下一个消息
+                            return; // 直接返回，不执行后续代码
                         } else {
                             printf("错误：无法创建右键按下事件\n");
                         }
