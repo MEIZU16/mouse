@@ -207,7 +207,8 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
                   current_buttons, point.x, point.y);
             
             // 打印更多的调试信息
-            printf("DEBUG: 发送右键按下事件，ButtonRight=%d\n", kCGMouseButtonRight);
+            printf("DEBUG: 发送右键按下事件，ButtonRight=%d, 事件类型=%d\n", 
+                  kCGMouseButtonRight, kCGEventRightMouseDown);
             
             // 创建并发送右键按下事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
@@ -215,6 +216,7 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             
             // 确保事件有效
             if (event) {
+                printf("成功创建右键按下事件，准备发送\n");
                 CGEventPost(kCGHIDEventTap, event);
                 CFRelease(event);
                 printf("右键按下事件已发送\n");
@@ -227,7 +229,8 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
                   current_buttons, point.x, point.y);
             
             // 打印更多的调试信息
-            printf("DEBUG: 发送右键释放事件，ButtonRight=%d\n", kCGMouseButtonRight);
+            printf("DEBUG: 发送右键释放事件，ButtonRight=%d, 事件类型=%d\n", 
+                  kCGMouseButtonRight, kCGEventRightMouseUp);
             
             // 创建并发送右键释放事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
@@ -235,6 +238,7 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
             
             // 确保事件有效
             if (event) {
+                printf("成功创建右键释放事件，准备发送\n");
                 CGEventPost(kCGHIDEventTap, event);
                 CFRelease(event);
                 printf("右键释放事件已发送\n");
@@ -501,7 +505,45 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                 }
                 // 处理其他按钮状态变化
                 else {
-                    handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
+                    // 直接处理右键事件
+                    if ((old_buttons & 0x04) == 0 && (mouse_msg->buttons & 0x04)) {
+                        // 右键按下
+                        printf("直接处理：右键按下，按钮状态: %d，坐标: (%.1f, %.1f)\n", 
+                              mouse_msg->buttons, point.x, point.y);
+                        
+                        // 创建并发送右键按下事件
+                        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                            kCGEventRightMouseDown, point, kCGMouseButtonRight);
+                        
+                        if (event) {
+                            CGEventPost(kCGHIDEventTap, event);
+                            CFRelease(event);
+                            printf("右键按下事件已直接发送\n");
+                        } else {
+                            printf("错误：无法创建右键按下事件\n");
+                        }
+                    }
+                    else if ((old_buttons & 0x04) && (mouse_msg->buttons & 0x04) == 0) {
+                        // 右键释放
+                        printf("直接处理：右键释放，按钮状态: %d，坐标: (%.1f, %.1f)\n", 
+                              mouse_msg->buttons, point.x, point.y);
+                        
+                        // 创建并发送右键释放事件
+                        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                            kCGEventRightMouseUp, point, kCGMouseButtonRight);
+                        
+                        if (event) {
+                            CGEventPost(kCGHIDEventTap, event);
+                            CFRelease(event);
+                            printf("右键释放事件已直接发送\n");
+                        } else {
+                            printf("错误：无法创建右键释放事件\n");
+                        }
+                    }
+                    else {
+                        // 原有的handle_mouse_buttons调用，保留作为备选处理路径
+                        handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
+                    }
                 }
             }
             // 没有按钮状态变化，只有位置变化
