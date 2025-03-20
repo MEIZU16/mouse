@@ -387,12 +387,48 @@ static void check_network_status(AppState *state) {
               time_since_last_message,
               state->network->connected ? "已连接" : "未连接");
         last_status_time = current_time;
+        
+        // 如果已标记为断开连接，尝试重新启动监听服务
+        if (!state->network->connected) {
+            printf("[NETWORK] 连接已断开，尝试重新启动监听...\n");
+            
+            // 关闭客户端连接
+            if (state->network->client_fd > 0) {
+                close(state->network->client_fd);
+                state->network->client_fd = -1;
+            }
+            
+            // 关闭服务器套接字
+            if (state->network->socket_fd > 0) {
+                close(state->network->socket_fd);
+                state->network->socket_fd = -1;
+            }
+            
+            // 重新启动服务器
+            if (network_start_server(state->network, state->port)) {
+                printf("[NETWORK] 成功重新启动监听服务 (端口 %d)\n", state->port);
+            } else {
+                printf("[NETWORK] 重新启动监听服务失败 (端口 %d)\n", state->port);
+            }
+        }
     }
     
     // 如果30秒没有消息，尝试重置网络
     if (time_since_last_message > 30.0 && state->network->connected) {
         printf("[NETWORK] 警告: 30秒未收到消息，尝试重置网络连接\n");
-        // 这里不真正重置网络，只做记录，避免引入新问题
+        
+        // 关闭客户端连接，强制重新建立
+        if (state->network->client_fd > 0) {
+            printf("[NETWORK] 强制关闭客户端连接，等待重新连接\n");
+            close(state->network->client_fd);
+            state->network->client_fd = -1;
+            state->network->connected = false;
+        }
+        
+        // 重启监听服务
+        if (network_start_server(state->network, state->port)) {
+            printf("[NETWORK] 成功重新启动监听服务 (端口 %d)\n", state->port);
+        }
     }
 }
 

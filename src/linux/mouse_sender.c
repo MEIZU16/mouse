@@ -361,6 +361,65 @@ static bool connect_to_server(AppState *state) {
     return true;
 }
 
+// 重试连接到服务器
+static gboolean retry_connect(gpointer data) {
+    AppState *state = (AppState *)data;
+    
+    // 如果已经连接，不需要重连
+    if (state->connected) {
+        printf("[NETWORK] 已连接，不需要重连\n");
+        return FALSE; // 停止定时器
+    }
+    
+    // 重新初始化网络（如果需要）
+    if (!state->network) {
+        state->network = network_init();
+        if (!state->network) {
+            fprintf(stderr, "[NETWORK] 无法初始化网络\n");
+            return TRUE; // 继续尝试
+        }
+    }
+    
+    // 尝试连接
+    printf("[NETWORK] 尝试重新连接到 %s:%d...\n", state->server_ip, state->port);
+    if (network_connect(state->network, state->server_ip, state->port)) {
+        state->connected = true;
+        printf("[NETWORK] 成功重新连接到服务器 %s:%d\n", state->server_ip, state->port);
+        return FALSE; // 成功连接，停止定时器
+    } else {
+        static int retry_count = 0;
+        retry_count++;
+        
+        if (retry_count % 5 == 0) { // 每5次重试输出一次消息
+            fprintf(stderr, "[NETWORK] 第%d次重连失败，将继续尝试...\n", retry_count);
+        }
+        
+        return TRUE; // 继续尝试重连
+    }
+}
+
+// 网络状态检查
+static gboolean check_network_status(gpointer data) {
+    AppState *state = (AppState *)data;
+    
+    // 检查网络状态
+    if (state->network && !state->connected && state->network->connected) {
+        // 更新状态
+        state->connected = true;
+        printf("[NETWORK] 网络连接已恢复\n");
+    } else if (state->network && state->connected && !state->network->connected) {
+        // 连接断开
+        state->connected = false;
+        printf("[NETWORK] 网络连接已断开，启动自动重连...\n");
+        
+        // 启动重连定时器（每3秒尝试一次）
+        g_timeout_add(3000, retry_connect, state);
+    }
+    
+    // 每5秒执行一次
+    return TRUE;
+}
+
 // 初始化应用程序
 static bool init_app(AppState *state, int argc, char **argv) {
     // 初始化GTK
@@ -420,9 +479,15 @@ static bool init_app(AppState *state, int argc, char **argv) {
     
     // 连接到服务器
     if (!connect_to_server(state)) {
-        // 连接失败，但继续运行程序
-        fprintf(stderr, "未能连接到服务器，将在GUI启动后重试\n");
+        // 连接失败，但继续运行程序，并启动自动重连
+        fprintf(stderr, "未能连接到服务器，将在后台自动重试\n");
+        
+        // 添加重连定时器（每3秒尝试一次）
+        g_timeout_add(3000, retry_connect, state);
     }
+    
+    // 添加网络状态检查定时器（每5秒检查一次）
+    g_timeout_add(5000, check_network_status, state);
     
     return true;
 }

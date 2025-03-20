@@ -193,37 +193,53 @@ static bool accept_client(NetworkContext* ctx) {
     return true;
 }
 
-// 发送消息
-bool network_send_message(NetworkContext* ctx, const Message* msg, size_t msg_size) {
-    if (!ctx || !msg || msg_size == 0) return false;
-    
-    if (!ctx->connected) {
-        if (ctx->is_server) {
-            if (!accept_client(ctx) || !ctx->connected) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
-    
-    int fd = ctx->is_server ? ctx->client_fd : ctx->socket_fd;
-    
-    ssize_t sent = send(fd, msg, msg_size, 0);
-    if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // 缓冲区已满，非错误
-            return false;
-        }
-        ctx->connected = false;
-        return false;
-    } else if (sent == 0) {
-        // 连接已关闭
-        ctx->connected = false;
+// 发送消息到网络
+bool network_send_message(NetworkContext *ctx, const Message *msg, size_t msg_size) {
+    // 检查连接状态
+    if (!ctx || !ctx->connected) {
+        printf("[NETWORK] 错误: 尝试发送消息但连接未建立\n");
         return false;
     }
     
-    return (size_t)sent == msg_size;
+    // 获取要发送消息的套接字描述符
+    int socket_fd = ctx->is_server ? ctx->client_fd : ctx->socket_fd;
+    
+    // 记录发送状态
+    static time_t last_send_failure_time = 0;
+    static int send_failures = 0;
+    
+    // 尝试发送消息
+    ssize_t bytes_sent = send(socket_fd, msg, msg_size, MSG_NOSIGNAL);
+    
+    // 检查发送结果
+    if (bytes_sent < 0) {
+        // 发送失败
+        time_t current_time = time(NULL);
+        send_failures++;
+        
+        // 限制错误输出频率
+        if (current_time - last_send_failure_time > 5) {
+            printf("[NETWORK] 错误: 发送消息失败，错误码: %d (%s), 累计失败: %d\n", 
+                  errno, strerror(errno), send_failures);
+            last_send_failure_time = current_time;
+        }
+        
+        // 如果10秒内连续失败超过5次，认为连接已经断开
+        if (send_failures >= 5 && current_time - last_send_failure_time <= 10) {
+            printf("[NETWORK] 严重错误: 多次发送失败，标记连接为断开\n");
+            ctx->connected = false;
+        }
+        
+        return false;
+    } else if (bytes_sent < (ssize_t)msg_size) {
+        // 部分发送成功
+        printf("[NETWORK] 警告: 消息仅部分发送 (%zd/%zu 字节)\n", bytes_sent, msg_size);
+        return false;
+    } else {
+        // 发送成功，重置失败计数
+        send_failures = 0;
+        return true;
+    }
 }
 
 // 快捷方法：发送鼠标移动消息
@@ -289,83 +305,89 @@ bool network_send_scroll(NetworkContext* ctx, float rel_x, float rel_y, float de
     return result;
 }
 
-// 接收消息
-bool network_receive_message(NetworkContext* ctx, Message* msg, size_t* msg_size) {
-    if (!ctx || !msg || !msg_size) return false;
-    
-    if (!ctx->connected) {
-        if (ctx->is_server) {
-            if (!accept_client(ctx) || !ctx->connected) {
-                return false;
-            }
-        } else {
-            return false;
-        }
+// 接收消息回调处理
+bool network_receive_message(NetworkContext *ctx, Message *msg, size_t *msg_size) {
+    // 检查状态
+    if (!ctx || !ctx->connected) {
+        return false;
     }
     
-    int fd = ctx->is_server ? ctx->client_fd : ctx->socket_fd;
+    // 获取连接的套接字
+    int socket_fd = ctx->is_server ? ctx->client_fd : ctx->socket_fd;
     
-    // 首先接收消息类型（1字节）
-    uint8_t type;
-    ssize_t received = recv(fd, &type, 1, MSG_PEEK);
+    // 检查网络连接状态
+    static time_t last_recv_failure_time = 0;
+    static int recv_failures = 0;
     
-    if (received < 0) {
+    // 首先接收消息类型和大小
+    Message header;
+    ssize_t bytes_recv = recv(socket_fd, &header, sizeof(MessageHeader), MSG_PEEK | MSG_DONTWAIT);
+    
+    if (bytes_recv <= 0) {
+        // 非阻塞模式下无数据可读，不是错误
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // 没有数据，非错误
             return false;
         }
-        ctx->connected = false;
-        return false;
-    } else if (received == 0) {
-        // 连接已关闭
-        ctx->connected = false;
+        
+        // 处理接收错误
+        time_t current_time = time(NULL);
+        recv_failures++;
+        
+        // 限制错误输出频率
+        if (current_time - last_recv_failure_time > 5) {
+            if (bytes_recv == 0) {
+                printf("[NETWORK] 错误: 连接已关闭\n");
+            } else {
+                printf("[NETWORK] 错误: 接收消息失败，错误码: %d (%s), 累计失败: %d\n", 
+                      errno, strerror(errno), recv_failures);
+            }
+            last_recv_failure_time = current_time;
+        }
+        
+        // 如果连接已关闭或者10秒内连续失败超过5次，则标记连接断开
+        if (bytes_recv == 0 || (recv_failures >= 5 && current_time - last_recv_failure_time <= 10)) {
+            printf("[NETWORK] 严重错误: 连接已断开\n");
+            ctx->connected = false;
+            
+            // 如果是服务端，关闭客户端连接并准备接受新连接
+            if (ctx->is_server) {
+                printf("[NETWORK] 服务端: 准备接受新连接\n");
+                close(ctx->client_fd);
+                ctx->client_fd = -1;
+                
+                // 重新开始监听
+                network_prepare_server(ctx);
+            }
+        }
+        
         return false;
     }
     
     // 根据消息类型确定消息大小
-    size_t expected_size;
-    switch (type) {
-        case MSG_MOUSE_MOVE:
-            expected_size = sizeof(MouseMoveMessage);
-            break;
-        case MSG_SCROLL:
-            expected_size = sizeof(ScrollMessage);
-            break;
-        case MSG_CONNECT:
-            expected_size = sizeof(ConnectMessage);
-            break;
-        case MSG_DISCONNECT:
-            expected_size = sizeof(DisconnectMessage);
-            break;
-        case MSG_HEARTBEAT:
-            expected_size = sizeof(HeartbeatMessage);
-            break;
-        default:
-            // 未知消息类型
-            return false;
+    size_t expected_size = get_message_size(header.type);
+    if (expected_size == 0) {
+        printf("[NETWORK] 错误: 未知消息类型 %d\n", header.type);
+        return false;
     }
     
     // 接收完整消息
-    received = recv(fd, msg, expected_size, 0);
-    
-    if (received < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // 没有足够的数据，非错误
-            return false;
-        }
-        ctx->connected = false;
-        return false;
-    } else if (received == 0) {
-        // 连接已关闭
-        ctx->connected = false;
+    bytes_recv = recv(socket_fd, msg, expected_size, 0);
+    if (bytes_recv < (ssize_t)expected_size) {
+        printf("[NETWORK] 错误: 消息不完整，接收 %zd/%zu 字节\n", bytes_recv, expected_size);
         return false;
     }
     
-    *msg_size = received;
+    // 接收成功，重置失败计数
+    recv_failures = 0;
     
-    // 调用回调函数
+    // 如果设置了回调，调用回调函数
     if (ctx->callback) {
-        ctx->callback(msg, *msg_size, ctx->user_data);
+        ctx->callback(msg, expected_size, ctx->user_data);
+    }
+    
+    // 返回消息大小
+    if (msg_size) {
+        *msg_size = expected_size;
     }
     
     return true;
@@ -401,4 +423,23 @@ void network_disconnect(NetworkContext* ctx) {
     }
     
     ctx->connected = false;
+}
+
+// 根据消息类型获取消息大小
+size_t get_message_size(uint8_t type) {
+    switch (type) {
+        case MSG_MOUSE_MOVE:
+            return sizeof(MouseMoveMessage);
+        case MSG_SCROLL:
+            return sizeof(ScrollMessage);
+        case MSG_CONNECT:
+            return sizeof(ConnectMessage);
+        case MSG_DISCONNECT:
+            return sizeof(DisconnectMessage);
+        case MSG_HEARTBEAT:
+            return sizeof(HeartbeatMessage);
+        default:
+            // 未知消息类型
+            return 0;
+    }
 } 
