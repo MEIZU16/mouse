@@ -419,48 +419,18 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             CGPoint point = CGPointMake(abs_x, abs_y);
             
             // 检查消息ID，避免重复处理
-            if (mouse_msg->timestamp == state->last_message_id) {
-                // 精确对比消息ID确认是否真的重复
-                if (mouse_msg->timestamp == state->last_message_id) {
-                    printf("严格检查ID: %llu vs %llu\n", mouse_msg->timestamp, state->last_message_id);
-                }
-                
-                // 右键状态值为4，不要忽略任何可能的右键事件
-                // 不管是否重复消息都处理按钮值为4的情况
-                if (mouse_msg->buttons == 4 || state->last_buttons == 4) {
-                    printf("右键状态检测：检测到右键操作(按钮值4)，强制处理\n");
-                    // 创建右键事件
-                    if (mouse_msg->buttons == 4 && state->last_buttons == 0) {
-                        // 右键按下
-                        CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                            kCGEventRightMouseDown, point, kCGMouseButtonRight);
-                        
-                        if (event) {
-                            CGEventPost(kCGHIDEventTap, event);
-                            CFRelease(event);
-                            printf("右键按下事件已发送(忽略重复检查)\n");
-                        }
-                    } 
-                    else if (mouse_msg->buttons == 0 && state->last_buttons == 4) {
-                        // 右键释放
-                        CGEventRef event = CGEventCreateMouseEvent(NULL, 
-                            kCGEventRightMouseUp, point, kCGMouseButtonRight);
-                        
-                        if (event) {
-                            CGEventPost(kCGHIDEventTap, event);
-                            CFRelease(event);
-                            printf("右键释放事件已发送(忽略重复检查)\n");
-                        }
-                    }
-                } else {
-                    // 非右键操作的重复消息，可以忽略
-                    printf("忽略重复消息 ID: %llu\n", mouse_msg->timestamp);
-                    return;
-                }
+            bool is_right_click = (mouse_msg->buttons == 4 || state->last_buttons == 4);
+            
+            // 对于右键事件，完全跳过重复消息检查
+            if (!is_right_click && mouse_msg->timestamp == state->last_message_id) {
+                printf("忽略重复消息 ID: %llu（非右键事件）\n", mouse_msg->timestamp);
+                return;
             }
             
-            // 保存当前消息ID
-            state->last_message_id = mouse_msg->timestamp;
+            // 保存当前消息ID（对于非右键事件）
+            if (!is_right_click) {
+                state->last_message_id = mouse_msg->timestamp;
+            }
             
             // 输出接收到的原始按钮状态
             printf("接收到消息: 按钮状态=%d\n", mouse_msg->buttons);
