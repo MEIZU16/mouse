@@ -42,4 +42,10 @@ void network_set_callback(NetworkContext* ctx, MessageCallback callback, void* u
 // 断开连接
 void network_disconnect(NetworkContext* ctx);
 
+// 获取连接状态
+bool network_is_connected(NetworkContext* ctx);
+
+// 服务端：准备服务器状态，用于重新接受连接
+void network_prepare_server(NetworkContext* ctx);
+
 #endif // MOUSE_NETWORK_H 

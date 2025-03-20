@@ -403,11 +403,13 @@ static gboolean check_network_status(gpointer data) {
     AppState *state = (AppState *)data;
     
     // 检查网络状态
-    if (state->network && !state->connected && state->network->connected) {
+    bool is_connected = state->network ? network_is_connected(state->network) : false;
+    
+    if (state->network && !state->connected && is_connected) {
         // 更新状态
         state->connected = true;
         printf("[NETWORK] 网络连接已恢复\n");
-    } else if (state->network && state->connected && !state->network->connected) {
+    } else if (state->network && state->connected && !is_connected) {
         // 连接断开
         state->connected = false;
         printf("[NETWORK] 网络连接已断开，启动自动重连...\n");

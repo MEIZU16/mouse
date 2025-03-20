@@ -305,6 +305,25 @@ bool network_send_scroll(NetworkContext* ctx, float rel_x, float rel_y, float de
     return result;
 }
 
+// 根据消息类型获取消息大小
+static size_t get_message_size(uint8_t type) {
+    switch (type) {
+        case MSG_MOUSE_MOVE:
+            return sizeof(MouseMoveMessage);
+        case MSG_SCROLL:
+            return sizeof(ScrollMessage);
+        case MSG_CONNECT:
+            return sizeof(ConnectMessage);
+        case MSG_DISCONNECT:
+            return sizeof(DisconnectMessage);
+        case MSG_HEARTBEAT:
+            return sizeof(HeartbeatMessage);
+        default:
+            // 未知消息类型
+            return 0;
+    }
+}
+
 // 接收消息回调处理
 bool network_receive_message(NetworkContext *ctx, Message *msg, size_t *msg_size) {
     // 检查状态
@@ -319,9 +338,9 @@ bool network_receive_message(NetworkContext *ctx, Message *msg, size_t *msg_size
     static time_t last_recv_failure_time = 0;
     static int recv_failures = 0;
     
-    // 首先接收消息类型和大小
-    Message header;
-    ssize_t bytes_recv = recv(socket_fd, &header, sizeof(MessageHeader), MSG_PEEK | MSG_DONTWAIT);
+    // 首先接收消息类型
+    uint8_t msg_type;
+    ssize_t bytes_recv = recv(socket_fd, &msg_type, sizeof(uint8_t), MSG_PEEK | MSG_DONTWAIT);
     
     if (bytes_recv <= 0) {
         // 非阻塞模式下无数据可读，不是错误
@@ -364,9 +383,9 @@ bool network_receive_message(NetworkContext *ctx, Message *msg, size_t *msg_size
     }
     
     // 根据消息类型确定消息大小
-    size_t expected_size = get_message_size(header.type);
+    size_t expected_size = get_message_size(msg_type);
     if (expected_size == 0) {
-        printf("[NETWORK] 错误: 未知消息类型 %d\n", header.type);
+        printf("[NETWORK] 错误: 未知消息类型 %d\n", msg_type);
         return false;
     }
     
@@ -425,21 +444,30 @@ void network_disconnect(NetworkContext* ctx) {
     ctx->connected = false;
 }
 
-// 根据消息类型获取消息大小
-size_t get_message_size(uint8_t type) {
-    switch (type) {
-        case MSG_MOUSE_MOVE:
-            return sizeof(MouseMoveMessage);
-        case MSG_SCROLL:
-            return sizeof(ScrollMessage);
-        case MSG_CONNECT:
-            return sizeof(ConnectMessage);
-        case MSG_DISCONNECT:
-            return sizeof(DisconnectMessage);
-        case MSG_HEARTBEAT:
-            return sizeof(HeartbeatMessage);
-        default:
-            // 未知消息类型
-            return 0;
+// 获取连接状态
+bool network_is_connected(NetworkContext* ctx) {
+    if (!ctx) return false;
+    return ctx->connected;
+}
+
+// 重置服务器状态
+void network_prepare_server(NetworkContext* ctx) {
+    if (!ctx || !ctx->is_server) return;
+    
+    // 如果客户端套接字仍然打开，关闭它
+    if (ctx->client_fd >= 0) {
+        close(ctx->client_fd);
+        ctx->client_fd = -1;
+    }
+    
+    // 标记为未连接
+    ctx->connected = false;
+    
+    // 确保服务器套接字有效
+    if (ctx->socket_fd < 0) {
+        // 服务器套接字无效，需要重新创建
+        printf("[NETWORK] 服务器套接字无效，将不再接受连接\n");
+    } else {
+        printf("[NETWORK] 服务器已准备好接受新连接\n");
     }
 } 
