@@ -203,27 +203,85 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
         
         if (current_buttons & 0x04) {
             // 右键按下
-            printf("按钮处理: 右键按下，按钮状态: %d\n", current_buttons);
+            // 如果此时已经处理过点击，忽略重复的按下事件
+            if (state->mousedown_sent && !state->mouseup_sent) {
+                printf("忽略重复的右键mousedown事件\n");
+                return;
+            }
+            
+            // 记录按下时间
+            state->button_down_time = current_time;
+            state->long_press_sent = false;
+            state->mousedown_sent = true;
+            state->mouseup_sent = false;
+            state->click_processed = false;
+            state->in_drag_mode = true; // 立即进入拖动模式
+            state->click_count = 1; // 始终为单击
+            
+            printf("按钮处理: 右键按下，进入拖动模式，按钮状态: %d\n", current_buttons);
             
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventRightMouseDown, point, kCGMouseButtonRight);
+            
+            // 设置点击计数
+            CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
+            
             CGEventPost(kCGHIDEventTap, event);
             CFRelease(event);
+            
+            // 记录最后点击时间
+            state->last_click_time = current_time;
+            
+            // 不再使用长按定时器
+            if (state->long_press_timer) {
+                [state->long_press_timer invalidate];
+                state->long_press_timer = nil;
+            }
         } else {
             // 右键释放
+            // 如果没有对应的按下事件，忽略此释放事件
+            if (!state->mousedown_sent || state->mouseup_sent) {
+                printf("忽略孤立的右键mouseup事件\n");
+                return;
+            }
+            
+            // 停止长按检测定时器
+            if (state->long_press_timer) {
+                [state->long_press_timer invalidate];
+                state->long_press_timer = nil;
+            }
+            
+            state->mousedown_sent = false;
+            state->mouseup_sent = true;
+            
             printf("按钮处理: 右键释放，按钮状态: %d\n", current_buttons);
             
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventRightMouseUp, point, kCGMouseButtonRight);
+            
+            // 设置点击计数
+            CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
+            
             CGEventPost(kCGHIDEventTap, event);
             CFRelease(event);
+            
+            // 重置拖动模式
+            state->in_drag_mode = false;
+            state->long_press_sent = false;
+            state->double_click_pending = false;
+            state->click_processed = true;
         }
-    } else if (current_buttons & 0x04) {
+    } else if (current_buttons & 0x04 && state->mousedown_sent && !state->mouseup_sent) {
         // 右键保持按下，发送拖动事件
         CGEventRef event = CGEventCreateMouseEvent(NULL, 
             kCGEventRightMouseDragged, point, kCGMouseButtonRight);
+        CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
         CGEventPost(kCGHIDEventTap, event);
         CFRelease(event);
+        
+        // 更新最后位置（重要！）
+        state->last_position = point;
+        printf("按钮处理: 发送右键拖动事件，按钮状态: %d\n", current_buttons);
     }
     
     // 若超过双击时间窗，重置双击状态
@@ -469,7 +527,75 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                 }
                 // 处理其他按钮状态变化
                 else {
-                    handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
+                    // 直接处理右键事件
+                    if ((old_buttons & 0x04) == 0 && (mouse_msg->buttons & 0x04)) {
+                        // 右键按下
+                        printf("直接处理：右键按下，按钮状态: %d，坐标: (%.1f, %.1f)，消息ID: %llu\n", 
+                              mouse_msg->buttons, point.x, point.y, mouse_msg->timestamp);
+                        
+                        // 记录按下时间
+                        NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+                        state->button_down_time = current_time;
+                        state->long_press_sent = false;
+                        state->mousedown_sent = true;
+                        state->mouseup_sent = false;
+                        state->click_processed = false;
+                        state->in_drag_mode = true; // 立即进入拖动模式
+                        state->click_count = 1; // 始终为单击
+                        
+                        // 创建并发送右键按下事件
+                        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                            kCGEventRightMouseDown, point, kCGMouseButtonRight);
+                        
+                        // 设置点击计数
+                        CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
+                        
+                        if (event) {
+                            CGEventPost(kCGHIDEventTap, event);
+                            CFRelease(event);
+                            printf("右键按下事件已直接发送\n");
+                        } else {
+                            printf("错误：无法创建右键按下事件\n");
+                        }
+                        
+                        // 记录最后点击时间
+                        state->last_click_time = current_time;
+                    }
+                    else if ((old_buttons & 0x04) && (mouse_msg->buttons & 0x04) == 0) {
+                        // 右键释放
+                        printf("直接处理：右键释放，按钮状态: %d，坐标: (%.1f, %.1f)，消息ID: %llu\n", 
+                              mouse_msg->buttons, point.x, point.y, mouse_msg->timestamp);
+                        
+                        if (state->mousedown_sent && !state->mouseup_sent) {
+                            state->mousedown_sent = false;
+                            state->mouseup_sent = true;
+                            state->in_drag_mode = false;
+                            
+                            // 创建并发送右键释放事件
+                            CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                                kCGEventRightMouseUp, point, kCGMouseButtonRight);
+                            
+                            // 设置点击计数
+                            CGEventSetIntegerValueField(event, kCGMouseEventClickState, state->click_count);
+                            
+                            if (event) {
+                                CGEventPost(kCGHIDEventTap, event);
+                                CFRelease(event);
+                                printf("右键释放事件已直接发送\n");
+                            } else {
+                                printf("错误：无法创建右键释放事件\n");
+                            }
+                            
+                            // 重置状态
+                            state->long_press_sent = false;
+                            state->double_click_pending = false;
+                            state->click_processed = true;
+                        }
+                    }
+                    else {
+                        // 原有的handle_mouse_buttons调用，保留作为备选处理路径
+                        handle_mouse_buttons(state, point, mouse_msg->buttons, old_buttons, mouse_msg->timestamp);
+                    }
                 }
             }
             // 没有按钮状态变化，只有位置变化
@@ -485,6 +611,15 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                     // 发送拖动事件
                     CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
                         kCGEventLeftMouseDragged, point, kCGMouseButtonLeft);
+                    CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, state->click_count);
+                    CGEventPost(kCGHIDEventTap, drag_event);
+                    CFRelease(drag_event);
+                }
+                // 如果右键按下状态，发送右键拖动事件
+                else if ((mouse_msg->buttons & 0x04) && state->mousedown_sent && !state->mouseup_sent) {
+                    // 发送右键拖动事件
+                    CGEventRef drag_event = CGEventCreateMouseEvent(NULL,
+                        kCGEventRightMouseDragged, point, kCGMouseButtonRight);
                     CGEventSetIntegerValueField(drag_event, kCGMouseEventClickState, state->click_count);
                     CGEventPost(kCGHIDEventTap, drag_event);
                     CFRelease(drag_event);
