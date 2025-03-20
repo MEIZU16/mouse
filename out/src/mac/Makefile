@@ -1,0 +1,22 @@
+CC = clang
+CFLAGS = -Wall -Wextra -g -O2 -I..
+OBJC_FLAGS = -framework Foundation -framework AppKit -framework ApplicationServices -framework IOKit
+OBJC_CFLAGS = -fobjc-arc
+
+OBJS = mouse_receiver.o ../common/network_mac.o
+
+all: mouse-receiver
+
+mouse-receiver: $(OBJS)
+	$(CC) -o $@ $^ $(OBJC_FLAGS)
+
+mouse_receiver.o: mouse_receiver.m
+	$(CC) $(CFLAGS) $(OBJC_CFLAGS) -c -o $@ $<
+
+../common/network_mac.o: ../common/network_mac.c ../common/network.h ../common/protocol.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+clean:
+	rm -f mouse-receiver $(OBJS)
+
+.PHONY: all clean 
