@@ -35,6 +35,9 @@ typedef struct {
     NSTimer *long_press_timer;    // 长按检测定时器
     bool enable_click_detection;  // 启用双击检测
     NSTimeInterval last_message_time; // 最后消息时间
+    bool enable_scroll;           // 启用滚轮功能
+    int scroll_mode;              // 滚轮控制模式 (0=禁用, 1=标准, 2=原生API)
+    NSTimeInterval last_scroll_time; // 最后滚轮事件时间
 } AppState;
 
 // 全局状态用于定时器回调
@@ -304,6 +307,141 @@ static void handle_mouse_move(AppState *state, CGPoint point, uint8_t current_bu
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
 }
 
+// 处理滚轮事件 - 增加多种实现方法
+static void handle_scroll(AppState *state, CGPoint point, float delta_x, float delta_y) {
+    // 记录执行开始时间
+    NSTimeInterval start_time = [[NSDate date] timeIntervalSince1970];
+    NSTimeInterval current_time = start_time;
+    
+    // 限制滚轮事件频率（每100毫秒最多一次）
+    if (current_time - state->last_scroll_time < 0.1) {
+        printf("[SCROLL_RATE] 忽略过快的滚轮事件 (间隔: %.3f秒)\n", 
+               current_time - state->last_scroll_time);
+        return;
+    }
+    state->last_scroll_time = current_time;
+    
+    printf("[SCROLL_FUNC] >>> 进入handle_scroll函数, 模式: %d, 参数: point=(%.1f, %.1f), delta=(%.2f, %.2f) <<<\n", 
+          state->scroll_mode, point.x, point.y, delta_x, delta_y);
+    
+    @try {
+        // 根据不同模式处理滚轮事件
+        switch (state->scroll_mode) {
+            case 0: // 禁用模式
+                printf("[SCROLL_FUNC] 滚轮功能已禁用\n");
+                return;
+                
+            case 1: { // 标准模式 - 使用CGEventCreateScrollWheelEvent
+                // 创建最基本的滚轮事件，使用固定数值1作为滚动单位
+                int scroll_y = 0;
+                int scroll_x = 0;
+                
+                // 仅使用方向信息，忽略大小
+                if (delta_y > 0) scroll_y = 1;
+                else if (delta_y < 0) scroll_y = -1;
+                
+                if (delta_x > 0) scroll_x = 1;
+                else if (delta_x < 0) scroll_x = -1;
+                
+                printf("[SCROLL_FUNC] 标准模式: 转换后的滚动值: X=%d, Y=%d\n", scroll_x, scroll_y);
+                
+                // 创建最基本的滚轮事件
+                printf("[SCROLL_FUNC] 正在创建CGEvent...\n");
+                CGEventRef scrollEvent = NULL;
+                
+                @try {
+                    scrollEvent = CGEventCreateScrollWheelEvent(
+                        NULL,                    // 默认源
+                        kCGScrollEventUnitLine,  // 使用线单位
+                        2,                       // 2轴滚动
+                        scroll_y,                // 垂直滚动，固定为±1
+                        scroll_x                 // 水平滚动，固定为±1
+                    );
+                    
+                    if (!scrollEvent) {
+                        printf("[SCROLL_ERROR] CGEventCreateScrollWheelEvent返回NULL\n");
+                        return;
+                    }
+                    
+                    printf("[SCROLL_FUNC] CGEvent创建成功，准备发送\n");
+                    
+                    // 立即发送事件
+                    CGEventPost(kCGHIDEventTap, scrollEvent);
+                    printf("[SCROLL_FUNC] CGEventPost调用完成\n");
+                    
+                    CFRelease(scrollEvent);
+                    printf("[SCROLL_FUNC] CGEvent已释放\n");
+                } @catch (NSException *exception) {
+                    printf("[SCROLL_ERROR] 创建或发送事件时发生异常: %s\n", [exception.reason UTF8String]);
+                    
+                    if (scrollEvent) {
+                        CFRelease(scrollEvent);
+                        printf("[SCROLL_FUNC] 异常后释放了CGEvent资源\n");
+                    }
+                }
+                break;
+            }
+                
+            case 2: { // 原生API模式 - 使用NSEvent和postEvent
+                printf("[SCROLL_FUNC] 使用原生API模式\n");
+                
+                // 使用固定滚动单位
+                CGFloat scroll_y = delta_y < 0 ? 10.0 : -10.0;
+                CGFloat scroll_x = delta_x < 0 ? 10.0 : -10.0;
+                
+                // 忽略过小的值
+                if (fabs(delta_y) < 0.01) scroll_y = 0;
+                if (fabs(delta_x) < 0.01) scroll_x = 0;
+                
+                printf("[SCROLL_FUNC] 原生API模式: 转换后的滚动值: X=%.1f, Y=%.1f\n", scroll_x, scroll_y);
+                
+                @try {
+                    // 创建滚轮事件
+                    NSEvent *scrollEvent = [NSEvent 
+                        mouseEventWithType:NSEventTypeScrollWheel
+                        location:NSMakePoint(point.x, state->screen_height - point.y) // 注意Y坐标系转换
+                        modifierFlags:0
+                        timestamp:[[NSProcessInfo processInfo] systemUptime]
+                        windowNumber:0
+                        context:nil
+                        eventNumber:0
+                        clickCount:0
+                        pressure:0
+                        buttonNumber:0
+                        deltaX:scroll_x
+                        deltaY:scroll_y
+                        deltaZ:0];
+                    
+                    if (scrollEvent == nil) {
+                        printf("[SCROLL_ERROR] 无法创建NSEvent滚轮事件\n");
+                        return;
+                    }
+                    
+                    // 发送事件
+                    printf("[SCROLL_FUNC] 正在使用NSEvent.postEvent发送原生滚轮事件\n");
+                    [NSEvent postEvent:scrollEvent atStart:YES];
+                    printf("[SCROLL_FUNC] NSEvent.postEvent调用完成\n");
+                    
+                } @catch (NSException *exception) {
+                    printf("[SCROLL_ERROR] 使用原生API发送滚轮事件时发生异常: %s\n", 
+                          [exception.reason UTF8String]);
+                }
+                break;
+            }
+                
+            default:
+                printf("[SCROLL_ERROR] 未知滚轮模式: %d\n", state->scroll_mode);
+                break;
+        }
+    } @catch (NSException *exception) {
+        printf("[SCROLL_ERROR] 处理滚轮事件时发生异常: %s\n", [exception.reason UTF8String]);
+    } @finally {
+        NSTimeInterval end_time = [[NSDate date] timeIntervalSince1970];
+        printf("[SCROLL_FUNC] <<< 退出handle_scroll函数, 执行时间: %.6f秒 >>>\n", 
+              end_time - start_time);
+    }
+}
+
 // 网络状态检查定时器回调
 static void check_network_status(AppState *state) {
     NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
@@ -491,10 +629,82 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             break;
         }
         
-        // 忽略滚轮事件
-        case MSG_SCROLL:
-            printf("[INFO] 收到滚轮消息，但滚轮功能已完全移除\n");
+        case MSG_SCROLL: {
+            // 滚轮事件消息处理
+            const ScrollMessage *scroll_msg = (const ScrollMessage *)msg;
+            
+            printf("[SCROLL_DEBUG] >>> 开始处理滚轮消息 ID: %llu, 模式: %d <<<\n", 
+                  (unsigned long long)scroll_msg->timestamp, 
+                  state->scroll_mode);
+            
+            // 检查是否启用滚轮功能
+            if (!state->enable_scroll || state->scroll_mode == 0) {
+                printf("[SCROLL_DEBUG] 滚轮功能已禁用（模式=%d），忽略消息\n", state->scroll_mode);
+                return;
+            }
+            
+            // 1. 防止重复处理
+            if (scroll_msg->timestamp == state->last_message_id) {
+                printf("[SCROLL_DEBUG] 忽略重复的滚轮消息 ID: %llu\n", 
+                      (unsigned long long)scroll_msg->timestamp);
+                return;
+            }
+            
+            // 2. 详细记录收到的消息内容
+            printf("[SCROLL_DEBUG] 接收滚轮消息：时间戳=%llu, deltaX=%.2f, deltaY=%.2f, 位置=(%.3f, %.3f)\n",
+                  (unsigned long long)scroll_msg->timestamp,
+                  scroll_msg->delta_x, scroll_msg->delta_y,
+                  scroll_msg->rel_x, scroll_msg->rel_y);
+            
+            // 3. 更新最后处理的消息ID
+            uint64_t previous_id = state->last_message_id;
+            state->last_message_id = scroll_msg->timestamp;
+            printf("[SCROLL_DEBUG] 更新消息ID: %llu -> %llu\n", 
+                  (unsigned long long)previous_id, 
+                  (unsigned long long)state->last_message_id);
+            
+            // 4. 验证数据有效性
+            if (isnan(scroll_msg->delta_x) || isnan(scroll_msg->delta_y) ||
+                isinf(scroll_msg->delta_x) || isinf(scroll_msg->delta_y)) {
+                printf("[SCROLL_ERROR] 收到无效的滚轮消息: NaN或Inf值 (X=%.2f, Y=%.2f)\n",
+                      scroll_msg->delta_x, scroll_msg->delta_y);
+                return;
+            }
+            
+            // 5. 检查滚动值，如果太小则忽略
+            if (fabs(scroll_msg->delta_x) < 0.001 && fabs(scroll_msg->delta_y) < 0.001) {
+                printf("[SCROLL_DEBUG] 忽略无效的滚轮消息: 滚动量太小 (X=%.5f, Y=%.5f)\n",
+                      scroll_msg->delta_x, scroll_msg->delta_y);
+                return;
+            }
+            
+            // 6. 计算绝对坐标
+            float abs_x = fmax(0, fmin(scroll_msg->rel_x * state->screen_width, state->screen_width - 1));
+            float abs_y = fmax(0, fmin(scroll_msg->rel_y * state->screen_height, state->screen_height - 1));
+            
+            // 7. 记录详细信息
+            printf("[SCROLL_DEBUG] 准备处理滚轮消息: 位置=(%.1f, %.1f), 滚动量=(%.2f, %.2f)\n", 
+                   abs_x, abs_y, scroll_msg->delta_x, scroll_msg->delta_y);
+            
+            printf("[SCROLL_DEBUG] 尝试调用handle_scroll函数 [模式=%d]...\n", state->scroll_mode);
+            
+            // 9. 添加异常保护
+            @try {
+                // 直接处理滚轮事件
+                CGPoint point = CGPointMake(abs_x, abs_y);
+                handle_scroll(state, point, scroll_msg->delta_x, scroll_msg->delta_y);
+                printf("[SCROLL_DEBUG] handle_scroll函数成功执行完毕\n");
+            } @catch (NSException *exception) {
+                printf("[SCROLL_ERROR] 滚轮处理异常: %s\n", [exception.reason UTF8String]);
+                printf("[SCROLL_ERROR] 异常名称: %s\n", [exception.name UTF8String]);
+                printf("[SCROLL_ERROR] 调用栈: %s\n", [[exception callStackSymbols] description].UTF8String);
+            } @finally {
+                printf("[SCROLL_DEBUG] <<< 结束处理滚轮消息 ID: %llu >>>\n", 
+                      (unsigned long long)scroll_msg->timestamp);
+            }
+            
             break;
+        }
         
         // 可以添加其他消息类型的处理
         default:
@@ -507,12 +717,37 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
 // 初始化应用程序
 bool init_app(AppState *state, int argc, const char **argv) {
     // 解析命令行参数
-    state->port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
+    state->port = DEFAULT_PORT;
+    state->scroll_mode = 0; // 默认禁用滚轮
+    
+    // 处理命令行参数
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+            state->port = atoi(argv[i + 1]);
+            i++; // 跳过下一个参数
+        } 
+        else if (strcmp(argv[i], "--scroll") == 0 && i + 1 < argc) {
+            state->scroll_mode = atoi(argv[i + 1]);
+            i++; // 跳过下一个参数
+        }
+        else if (strcmp(argv[i], "--enable-scroll") == 0) {
+            state->scroll_mode = 1; // 启用标准模式
+        }
+        else if (strcmp(argv[i], "--native-scroll") == 0) {
+            state->scroll_mode = 2; // 启用原生API模式
+        }
+        else if (isdigit(argv[i][0])) { 
+            // 向后兼容，允许直接指定端口
+            state->port = atoi(argv[i]);
+        }
+    }
+    
     state->running = false;
     state->last_buttons = 0; // 初始化按钮状态
     state->last_position = CGPointMake(0, 0);
     state->last_move_time = [[NSDate date] timeIntervalSince1970];
     state->last_message_time = state->last_move_time; // 初始化最后消息时间
+    state->last_scroll_time = state->last_move_time; // 初始化最后滚轮事件时间
     state->last_click_time = 0;
     state->double_click_pending = false;
     state->click_count = 0;
@@ -527,6 +762,7 @@ bool init_app(AppState *state, int argc, const char **argv) {
     state->in_drag_mode = false;
     state->long_press_timer = nil;
     state->enable_click_detection = true; // 启用点击检测
+    state->enable_scroll = state->scroll_mode > 0; // 根据模式设置是否启用滚轮
     
     // 获取屏幕尺寸（主屏幕）
     NSScreen *mainScreen = [NSScreen mainScreen];
@@ -571,10 +807,12 @@ bool init_app(AppState *state, int argc, const char **argv) {
     printf("双击功能已启用，即时拖动功能已启用\n");
     printf("已优化为按下即可拖动模式，支持双击检测\n");
     printf("已优化坐标映射，确保Linux和Mac屏幕位置一致\n");
-    printf("滚轮功能已完全移除\n");
     
     // 输出功能状态
-    printf("初始设置：双击功能已%s\n", 
+    printf("初始设置: 端口=%d, 滚轮模式=%d (%s), 双击功能=%s\n", 
+          state->port,
+          state->scroll_mode, 
+          state->scroll_mode == 0 ? "禁用" : (state->scroll_mode == 1 ? "标准" : "原生API"),
           state->disable_double_click ? "禁用" : "启用");
     
     return true;
@@ -637,6 +875,18 @@ void run_app(AppState *state) {
 // 主函数
 int main(int argc, const char **argv) {
     @autoreleasepool {
+        // 显示帮助信息
+        if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+            printf("使用方法: %s [选项]\n", argv[0]);
+            printf("选项:\n");
+            printf("  --port <端口号>       指定监听端口（默认为9876）\n");
+            printf("  --scroll <模式>       设置滚轮模式（0=禁用, 1=标准, 2=原生API）\n");
+            printf("  --enable-scroll       启用标准滚轮模式（相当于--scroll 1）\n");
+            printf("  --native-scroll       启用原生API滚轮模式（相当于--scroll 2）\n");
+            printf("  --help, -h            显示此帮助信息\n");
+            return 0;
+        }
+        
         AppState state;
         
         // 初始化应用程序
@@ -650,7 +900,7 @@ int main(int argc, const char **argv) {
         if (!isTrusted) {
             NSAlert *alert = [[NSAlert alloc] init];
             [alert setMessageText:@"需要辅助功能权限"];
-            [alert setInformativeText:@"必须授予辅助功能权限以确保鼠标控制正常工作。请在系统设置中允许此应用程序控制您的电脑，然后重新启动应用程序。"];
+            [alert setInformativeText:@"必须授予辅助功能权限以确保滚轮正常工作。请在系统设置中允许此应用程序控制您的电脑，然后重新启动应用程序。"];
             [alert addButtonWithTitle:@"打开系统设置"];
             [alert addButtonWithTitle:@"退出"];
             
