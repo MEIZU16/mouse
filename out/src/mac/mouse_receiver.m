@@ -203,27 +203,59 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
         
         if (current_buttons & 0x04) {
             // 右键按下
-            printf("按钮处理: 右键按下，按钮状态: %d\n", current_buttons);
+            printf("按钮处理: 右键按下，按钮状态: %d，坐标: (%.1f, %.1f)\n", 
+                  current_buttons, point.x, point.y);
             
+            // 打印更多的调试信息
+            printf("DEBUG: 发送右键按下事件，ButtonRight=%d\n", kCGMouseButtonRight);
+            
+            // 创建并发送右键按下事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventRightMouseDown, point, kCGMouseButtonRight);
-            CGEventPost(kCGHIDEventTap, event);
-            CFRelease(event);
+            
+            // 确保事件有效
+            if (event) {
+                CGEventPost(kCGHIDEventTap, event);
+                CFRelease(event);
+                printf("右键按下事件已发送\n");
+            } else {
+                printf("错误：无法创建右键按下事件\n");
+            }
         } else {
             // 右键释放
-            printf("按钮处理: 右键释放，按钮状态: %d\n", current_buttons);
+            printf("按钮处理: 右键释放，按钮状态: %d，坐标: (%.1f, %.1f)\n", 
+                  current_buttons, point.x, point.y);
             
+            // 打印更多的调试信息
+            printf("DEBUG: 发送右键释放事件，ButtonRight=%d\n", kCGMouseButtonRight);
+            
+            // 创建并发送右键释放事件
             CGEventRef event = CGEventCreateMouseEvent(NULL, 
                 kCGEventRightMouseUp, point, kCGMouseButtonRight);
-            CGEventPost(kCGHIDEventTap, event);
-            CFRelease(event);
+            
+            // 确保事件有效
+            if (event) {
+                CGEventPost(kCGHIDEventTap, event);
+                CFRelease(event);
+                printf("右键释放事件已发送\n");
+            } else {
+                printf("错误：无法创建右键释放事件\n");
+            }
         }
     } else if (current_buttons & 0x04) {
         // 右键保持按下，发送拖动事件
+        printf("按钮处理: 右键拖动，按钮状态: %d，坐标: (%.1f, %.1f)\n", 
+              current_buttons, point.x, point.y);
+        
         CGEventRef event = CGEventCreateMouseEvent(NULL, 
             kCGEventRightMouseDragged, point, kCGMouseButtonRight);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
+        
+        if (event) {
+            CGEventPost(kCGHIDEventTap, event);
+            CFRelease(event);
+        } else {
+            printf("错误：无法创建右键拖动事件\n");
+        }
     }
     
     // 若超过双击时间窗，重置双击状态
