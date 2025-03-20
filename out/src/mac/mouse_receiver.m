@@ -68,8 +68,14 @@ static void handle_mouse_buttons(AppState *state, CGPoint point, uint8_t current
     
     // 防止重复处理同一个消息
     if (message_id > 0 && message_id == state->last_message_id) {
-        printf("忽略重复消息 ID: %llu\n", message_id);
-        return;
+        // 检查是否为右键相关操作
+        if ((current_buttons & 0x04) || (last_buttons & 0x04)) {
+            printf("检测到重复消息ID但包含右键操作，强制处理 ID: %llu\n", message_id);
+            // 继续执行，不返回
+        } else {
+            printf("忽略重复消息 ID: %llu\n", message_id);
+            return;
+        }
     }
     
     if (message_id > 0) {
@@ -414,7 +420,17 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             
             // 检查消息ID，避免重复处理
             if (mouse_msg->timestamp == state->last_message_id) {
-                return;
+                // 即使是重复消息，也不要立即返回，仍然输出信息并检查是否为右键事件
+                printf("检测到重复消息 ID: %llu，按钮状态=%d\n", mouse_msg->timestamp, mouse_msg->buttons);
+                
+                // 如果是右键相关的按钮状态(值为4)，我们依然处理它
+                if (mouse_msg->buttons == 4 || (state->last_buttons == 4 && mouse_msg->buttons == 0)) {
+                    printf("重复消息包含右键操作，强制处理此消息\n");
+                    // 继续执行，不返回
+                } else {
+                    // 非右键操作的重复消息，可以忽略
+                    return;
+                }
             }
             
             // 保存当前消息ID
@@ -503,13 +519,47 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                         state->click_processed = true;
                     }
                 }
+                // 专门处理原始按钮值为4的情况（右键）
+                else if (old_buttons == 0 && mouse_msg->buttons == 4) {
+                    // 这是右键按下
+                    printf("直接识别按钮值4为右键按下，坐标: (%.1f, %.1f)\n", point.x, point.y);
+                    
+                    // 创建右键按下事件
+                    CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                        kCGEventRightMouseDown, point, kCGMouseButtonRight);
+                    
+                    if (event) {
+                        CGEventPost(kCGHIDEventTap, event);
+                        CFRelease(event);
+                        printf("右键按下事件已发送（直接识别值4）\n");
+                    } else {
+                        printf("错误：无法创建右键按下事件\n");
+                    }
+                }
+                else if (old_buttons == 4 && mouse_msg->buttons == 0) {
+                    // 这是右键释放
+                    printf("直接识别按钮值4为右键释放，坐标: (%.1f, %.1f)\n", point.x, point.y);
+                    
+                    // 创建右键释放事件
+                    CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                        kCGEventRightMouseUp, point, kCGMouseButtonRight);
+                    
+                    if (event) {
+                        CGEventPost(kCGHIDEventTap, event);
+                        CFRelease(event);
+                        printf("右键释放事件已发送（直接识别值4）\n");
+                    } else {
+                        printf("错误：无法创建右键释放事件\n");
+                    }
+                }
                 // 处理其他按钮状态变化
                 else {
                     // 直接处理右键事件
                     if ((old_buttons & 0x04) == 0 && (mouse_msg->buttons & 0x04)) {
                         // 右键按下
-                        printf("直接处理：右键按下，按钮状态: %d，坐标: (%.1f, %.1f)\n", 
-                              mouse_msg->buttons, point.x, point.y);
+                        // 忽略消息ID检查，强制处理右键事件
+                        printf("直接处理：右键按下，按钮状态: %d，坐标: (%.1f, %.1f)，消息ID: %llu\n", 
+                              mouse_msg->buttons, point.x, point.y, mouse_msg->timestamp);
                         
                         // 创建并发送右键按下事件
                         CGEventRef event = CGEventCreateMouseEvent(NULL, 
@@ -525,8 +575,9 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                     }
                     else if ((old_buttons & 0x04) && (mouse_msg->buttons & 0x04) == 0) {
                         // 右键释放
-                        printf("直接处理：右键释放，按钮状态: %d，坐标: (%.1f, %.1f)\n", 
-                              mouse_msg->buttons, point.x, point.y);
+                        // 忽略消息ID检查，强制处理右键事件
+                        printf("直接处理：右键释放，按钮状态: %d，坐标: (%.1f, %.1f)，消息ID: %llu\n", 
+                              mouse_msg->buttons, point.x, point.y, mouse_msg->timestamp);
                         
                         // 创建并发送右键释放事件
                         CGEventRef event = CGEventCreateMouseEvent(NULL, 
