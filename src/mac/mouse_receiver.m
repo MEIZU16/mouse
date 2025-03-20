@@ -639,8 +639,18 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             break;
         }
         
-        // 忽略滚轮事件
+        // 处理滚轮事件
         case MSG_SCROLL: {
+            // 防止重入，避免卡死
+            static bool scroll_processing = false;
+            if (scroll_processing) {
+                printf("[SAFETY] 滚轮处理正在进行中，忽略新事件\n");
+                break;
+            }
+            
+            // 设置处理标志
+            scroll_processing = true;
+            
             const ScrollMessage *scroll_msg = (const ScrollMessage *)msg;
             
             // 计算绝对坐标
@@ -661,36 +671,55 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             if (scroll_msg->timestamp == last_scroll_timestamp) {
                 printf("[INFO] 忽略重复的滚轮消息 (时间戳: %llu)\n", 
                       (unsigned long long)scroll_msg->timestamp);
+                scroll_processing = false;
                 break;
             }
             
-            // 更新滚轮时间戳
-            last_scroll_timestamp = scroll_msg->timestamp;
-            
-            // 输出滚轮信息
-            printf("[INFO] 收到滚轮消息: 位置=(%0.1f, %0.1f), 方向X=%s, Y=%s\n", 
-                  point.x, point.y,
-                  scroll_msg->delta_x > 0 ? "右" : (scroll_msg->delta_x < 0 ? "左" : "无"),
-                  scroll_msg->delta_y > 0 ? "下" : (scroll_msg->delta_y < 0 ? "上" : "无"));
-            
-            // 创建并发送滚轮事件
-            CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
-                NULL,
-                kCGScrollEventUnitLine, // 使用行为单位
-                2,                      // 两个方向 (X和Y)
-                (int32_t)scroll_msg->delta_y, // Y方向滚动量
-                (int32_t)scroll_msg->delta_x  // X方向滚动量
-            );
-            
-            if (scrollEvent) {
-                // 发送滚轮事件
-                CGEventPost(kCGHIDEventTap, scrollEvent);
-                CFRelease(scrollEvent);
-                printf("[INFO] 滚轮事件已发送\n");
-            } else {
-                printf("[ERROR] 无法创建滚轮事件\n");
+            // 限制处理频率
+            static NSTimeInterval last_scroll_time = 0;
+            NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
+            if (current_time - last_scroll_time < 0.1) { // 100毫秒内不处理新事件
+                printf("[THROTTLE] 短时间内不处理新的滚轮事件\n");
+                scroll_processing = false;
+                break;
             }
             
+            // 更新时间戳
+            last_scroll_time = current_time;
+            last_scroll_timestamp = scroll_msg->timestamp;
+            
+            // 输出滚轮信息 - 仅关注Y方向
+            printf("[INFO] 收到滚轮消息: 位置=(%0.1f, %0.1f), 方向Y=%s\n", 
+                  point.x, point.y,
+                  scroll_msg->delta_y > 0 ? "下" : (scroll_msg->delta_y < 0 ? "上" : "无"));
+            
+            @try {
+                // 创建并发送滚轮事件 - 只用于垂直滚动
+                CGEventRef scrollEvent = CGEventCreateScrollWheelEvent(
+                    NULL,
+                    kCGScrollEventUnitLine, // 使用行为单位
+                    1,                      // 只关注Y方向
+                    (int32_t)scroll_msg->delta_y  // Y方向滚动量
+                );
+                
+                if (scrollEvent) {
+                    // 发送滚轮事件
+                    CGEventPost(kCGHIDEventTap, scrollEvent);
+                    CFRelease(scrollEvent);
+                    printf("[INFO] 滚轮事件已发送\n");
+                } else {
+                    printf("[ERROR] 无法创建滚轮事件\n");
+                }
+            } @catch (NSException *exception) {
+                // 捕获任何异常
+                printf("[ERROR] 处理滚轮事件时发生异常: %s\n", [exception.reason UTF8String]);
+            }
+            
+            // 强制短暂延迟，确保系统有时间处理事件
+            usleep(20000); // 20毫秒
+            
+            // 重置处理标志
+            scroll_processing = false;
             break;
         }
         

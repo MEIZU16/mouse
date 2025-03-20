@@ -257,77 +257,86 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         float rel_x = fmax(0.0, fmin(event->x / state->screen_width, 1.0));
         float rel_y = fmax(0.0, fmin(event->y / state->screen_height, 1.0));
         
-        // 静态变量存储上次滚动时间
+        // 静态变量存储上次滚动时间和处理状态
         static uint64_t last_scroll_time = 0;
+        static bool scroll_processing = false;
+        
+        // 防止重入，避免卡死
+        if (scroll_processing) {
+            printf("[SAFETY] 滚轮处理正在进行中，忽略新事件\n");
+            return TRUE;
+        }
+        
+        // 设置处理标志
+        scroll_processing = true;
+        
+        // 获取当前时间
         uint64_t current_time;
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
         current_time = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
         
-        // 限制发送频率，至少间隔200毫秒，避免过多事件导致卡死
-        if (current_time - last_scroll_time < 200) {
-            printf("[DEBUG] 忽略快速滚轮事件 (间隔=%lu ms)\n", 
+        // 限制发送频率，至少间隔300毫秒，避免过多事件导致卡死
+        if (current_time - last_scroll_time < 300) {
+            printf("[THROTTLE] 忽略快速滚轮事件 (间隔=%lu ms)\n", 
                   (unsigned long)(current_time - last_scroll_time));
+            scroll_processing = false;
             return TRUE;
         }
         
         // 更新上次滚动时间
         last_scroll_time = current_time;
         
-        // 初始化滚动量，使用固定值
-        float delta_x = 0.0;
+        // 简化滚动逻辑，只处理上下滚动，忽略左右滚动
         float delta_y = 0.0;
         
-        // 根据滚动方向设置滚动量 - 使用固定值
         switch (event->direction) {
             case GDK_SCROLL_UP:
                 delta_y = -1.0; // 向上滚动，固定为-1
-                printf("[DEBUG] 向上滚动\n");
+                printf("[SCROLL] 向上滚动\n");
                 break;
             case GDK_SCROLL_DOWN:
                 delta_y = 1.0;  // 向下滚动，固定为1
-                printf("[DEBUG] 向下滚动\n");
-                break;
-            case GDK_SCROLL_LEFT:
-                delta_x = -1.0; // 向左滚动，固定为-1
-                printf("[DEBUG] 向左滚动\n");
-                break;
-            case GDK_SCROLL_RIGHT:
-                delta_x = 1.0;  // 向右滚动，固定为1
-                printf("[DEBUG] 向右滚动\n");
+                printf("[SCROLL] 向下滚动\n");
                 break;
             case GDK_SCROLL_SMOOTH:
-                // 处理精确滚动，但只考虑方向
+                // 处理精确滚动，但只考虑垂直方向
                 gdouble dx = 0.0, dy = 0.0;
                 gdk_event_get_scroll_deltas((GdkEvent*)event, &dx, &dy);
                 
-                // 只考虑方向，不考虑大小
-                if (dy > 0) delta_y = 1.0;
-                else if (dy < 0) delta_y = -1.0;
+                // 只考虑垂直方向
+                if (dy > 0) delta_y = 1.0;  // 向下
+                else if (dy < 0) delta_y = -1.0; // 向上
                 
-                if (dx > 0) delta_x = 1.0;
-                else if (dx < 0) delta_x = -1.0;
-                
-                printf("[DEBUG] 平滑滚动: 方向X=%s, Y=%s\n", 
-                      delta_x > 0 ? "右" : (delta_x < 0 ? "左" : "无"),
+                printf("[SCROLL] 平滑滚动: Y=%s\n", 
                       delta_y > 0 ? "下" : (delta_y < 0 ? "上" : "无"));
                 break;
             default:
-                break;
+                // 忽略其他方向
+                scroll_processing = false;
+                return TRUE;
         }
         
-        // 只有有实际滚动时才发送
-        if (delta_x != 0.0 || delta_y != 0.0) {
-            printf("[DEBUG] 发送滚轮事件: X=%s, Y=%s\n", 
-                  delta_x > 0 ? "右" : (delta_x < 0 ? "左" : "无"),
-                  delta_y > 0 ? "下" : (delta_y < 0 ? "上" : "无"));
+        // 只有有实际垂直滚动时才发送
+        if (delta_y != 0.0) {
+            printf("[SENDING] 发送滚轮事件: Y=%s\n", 
+                  delta_y > 0 ? "下" : "上");
             
-            // 发送滚轮事件
-            if (!network_send_scroll(state->network, rel_x, rel_y, delta_x, delta_y)) {
+            // 安全发送滚轮事件
+            bool send_result = network_send_scroll(state->network, rel_x, rel_y, 0.0, delta_y);
+            
+            if (!send_result) {
                 printf("[ERROR] 发送滚轮事件失败\n");
-                return TRUE; // 发送失败时立即返回
+            } else {
+                printf("[SUCCESS] 滚轮事件已发送\n");
             }
+            
+            // 强制短暂延迟，避免事件堆积导致卡死
+            usleep(50000); // 50毫秒
         }
+        
+        // 重置处理标志
+        scroll_processing = false;
     }
     
     return TRUE;
