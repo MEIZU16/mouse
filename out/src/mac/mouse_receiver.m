@@ -420,15 +420,41 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             
             // 检查消息ID，避免重复处理
             if (mouse_msg->timestamp == state->last_message_id) {
-                // 即使是重复消息，也不要立即返回，仍然输出信息并检查是否为右键事件
-                printf("检测到重复消息 ID: %llu，按钮状态=%d\n", mouse_msg->timestamp, mouse_msg->buttons);
+                // 精确对比消息ID确认是否真的重复
+                if (mouse_msg->timestamp == state->last_message_id) {
+                    printf("严格检查ID: %llu vs %llu\n", mouse_msg->timestamp, state->last_message_id);
+                }
                 
-                // 如果是右键相关的按钮状态(值为4)，我们依然处理它
-                if (mouse_msg->buttons == 4 || (state->last_buttons == 4 && mouse_msg->buttons == 0)) {
-                    printf("重复消息包含右键操作，强制处理此消息\n");
-                    // 继续执行，不返回
+                // 右键状态值为4，不要忽略任何可能的右键事件
+                // 不管是否重复消息都处理按钮值为4的情况
+                if (mouse_msg->buttons == 4 || state->last_buttons == 4) {
+                    printf("右键状态检测：检测到右键操作(按钮值4)，强制处理\n");
+                    // 创建右键事件
+                    if (mouse_msg->buttons == 4 && state->last_buttons == 0) {
+                        // 右键按下
+                        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                            kCGEventRightMouseDown, point, kCGMouseButtonRight);
+                        
+                        if (event) {
+                            CGEventPost(kCGHIDEventTap, event);
+                            CFRelease(event);
+                            printf("右键按下事件已发送(忽略重复检查)\n");
+                        }
+                    } 
+                    else if (mouse_msg->buttons == 0 && state->last_buttons == 4) {
+                        // 右键释放
+                        CGEventRef event = CGEventCreateMouseEvent(NULL, 
+                            kCGEventRightMouseUp, point, kCGMouseButtonRight);
+                        
+                        if (event) {
+                            CGEventPost(kCGHIDEventTap, event);
+                            CFRelease(event);
+                            printf("右键释放事件已发送(忽略重复检查)\n");
+                        }
+                    }
                 } else {
                     // 非右键操作的重复消息，可以忽略
+                    printf("忽略重复消息 ID: %llu\n", mouse_msg->timestamp);
                     return;
                 }
             }
