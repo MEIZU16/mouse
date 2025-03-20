@@ -276,8 +276,8 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
         clock_gettime(CLOCK_MONOTONIC, &ts);
         current_time = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
         
-        // 限制发送频率，至少间隔300毫秒，避免过多事件导致卡死
-        if (current_time - last_scroll_time < 300) {
+        // 限制发送频率，至少间隔100毫秒，避免过多事件导致卡死
+        if (current_time - last_scroll_time < 100) {
             printf("[THROTTLE] 忽略快速滚轮事件 (间隔=%lu ms)\n", 
                   (unsigned long)(current_time - last_scroll_time));
             scroll_processing = false;
@@ -330,9 +330,6 @@ static gboolean on_scroll_event(GtkWidget *widget G_GNUC_UNUSED, GdkEventScroll 
             } else {
                 printf("[SUCCESS] 滚轮事件已发送\n");
             }
-            
-            // 强制短暂延迟，避免事件堆积导致卡死
-            usleep(50000); // 50毫秒
         }
         
         // 重置处理标志

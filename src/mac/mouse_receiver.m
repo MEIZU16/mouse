@@ -678,7 +678,7 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
             // 限制处理频率
             static NSTimeInterval last_scroll_time = 0;
             NSTimeInterval current_time = [[NSDate date] timeIntervalSince1970];
-            if (current_time - last_scroll_time < 0.1) { // 100毫秒内不处理新事件
+            if (current_time - last_scroll_time < 0.05) { // 50毫秒内不处理新事件
                 printf("[THROTTLE] 短时间内不处理新的滚轮事件\n");
                 scroll_processing = false;
                 break;
@@ -714,9 +714,6 @@ void message_callback(const Message* msg, size_t __unused msg_size, void* user_d
                 // 捕获任何异常
                 printf("[ERROR] 处理滚轮事件时发生异常: %s\n", [exception.reason UTF8String]);
             }
-            
-            // 强制短暂延迟，确保系统有时间处理事件
-            usleep(20000); // 20毫秒
             
             // 重置处理标志
             scroll_processing = false;
